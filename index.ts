@@ -4,6 +4,21 @@ import { readdirSync, statSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
+const luaDir = join(import.meta.dir, "lua");
+
+function readLua(name: string): Promise<string> {
+  return Bun.file(join(luaDir, `${name}.lua`)).text();
+}
+
+// Cache lua scripts at startup
+const lua = {
+  diagnostics: await readLua("diagnostics"),
+  hover: await readLua("hover"),
+  definition: await readLua("definition"),
+  references: await readLua("references"),
+  completions: await readLua("completions"),
+};
+
 function findNeovimSocket(): string {
   if (process.env.NVIM_LISTEN_ADDRESS) {
     return process.env.NVIM_LISTEN_ADDRESS;
@@ -51,209 +66,36 @@ function disconnect(socket: Socket): void {
 
 async function getDiagnostics(file?: string) {
   const { nvim, socket } = connectToNvim();
-
   const luaArgs = file ? [file] : [];
-  const diagnostics = await nvim.lua(`
-    local filter_file = select(1, ...)
-    local diags = vim.diagnostic.get()
-    local results = {}
-    for _, d in ipairs(diags) do
-      local fname = vim.api.nvim_buf_get_name(d.bufnr or 0)
-      if filter_file == nil or fname:find(filter_file, 1, true) then
-        table.insert(results, {
-          file = fname,
-          line = d.lnum + 1,
-          col = d.col + 1,
-          severity = d.severity,
-          message = d.message,
-          source = d.source or "unknown"
-        })
-      end
-    end
-    return results
-  `, luaArgs);
-
+  const diagnostics = await nvim.lua(lua.diagnostics, luaArgs);
   disconnect(socket);
   return diagnostics;
 }
 
 async function getHover(file: string, line: number, col: number) {
   const { nvim, socket } = connectToNvim();
-
-  const result = await nvim.lua(`
-    local file, line, col = ...
-
-    -- Find or open the buffer
-    local bufnr = vim.fn.bufnr(file)
-    if bufnr == -1 then
-      vim.cmd('badd ' .. file)
-      bufnr = vim.fn.bufnr(file)
-    end
-
-    -- Get LSP clients for this buffer
-    local clients = vim.lsp.get_clients({ bufnr = bufnr })
-    if #clients == 0 then
-      return { error = "No LSP client attached to " .. file }
-    end
-
-    -- Synchronous hover request
-    local params = {
-      textDocument = vim.lsp.util.make_text_document_params(bufnr),
-      position = { line = line - 1, character = col - 1 }
-    }
-
-    local responses = vim.lsp.buf_request_sync(bufnr, 'textDocument/hover', params, 3000)
-    if not responses then
-      return { error = "No hover response" }
-    end
-
-    for _, resp in pairs(responses) do
-      if resp.result and resp.result.contents then
-        local contents = resp.result.contents
-        if type(contents) == "table" then
-          return { result = contents.value or vim.inspect(contents) }
-        end
-        return { result = tostring(contents) }
-      end
-    end
-
-    return { error = "No hover info found" }
-  `, [file, line, col]);
-
+  const result = await nvim.lua(lua.hover, [file, line, col]);
   disconnect(socket);
   return result;
 }
 
 async function getDefinition(file: string, line: number, col: number) {
   const { nvim, socket } = connectToNvim();
-
-  const result = await nvim.lua(`
-    local file, line, col = ...
-
-    local bufnr = vim.fn.bufnr(file)
-    if bufnr == -1 then
-      vim.cmd('badd ' .. file)
-      bufnr = vim.fn.bufnr(file)
-    end
-
-    local params = {
-      textDocument = vim.lsp.util.make_text_document_params(bufnr),
-      position = { line = line - 1, character = col - 1 }
-    }
-
-    local responses = vim.lsp.buf_request_sync(bufnr, 'textDocument/definition', params, 3000)
-    if not responses then
-      return { error = "No definition response" }
-    end
-
-    local results = {}
-    for _, resp in pairs(responses) do
-      if resp.result then
-        local defs = type(resp.result[1]) == "table" and resp.result or { resp.result }
-        for _, def in ipairs(defs) do
-          local uri = def.uri or def.targetUri
-          local range = def.range or def.targetSelectionRange
-          if uri and range then
-            table.insert(results, {
-              file = vim.uri_to_fname(uri),
-              line = range.start.line + 1,
-              col = range.start.character + 1
-            })
-          end
-        end
-      end
-    end
-
-    return results
-  `, [file, line, col]);
-
+  const result = await nvim.lua(lua.definition, [file, line, col]);
   disconnect(socket);
   return result;
 }
 
 async function getReferences(file: string, line: number, col: number) {
   const { nvim, socket } = connectToNvim();
-
-  const result = await nvim.lua(`
-    local file, line, col = ...
-
-    local bufnr = vim.fn.bufnr(file)
-    if bufnr == -1 then
-      vim.cmd('badd ' .. file)
-      bufnr = vim.fn.bufnr(file)
-    end
-
-    local params = {
-      textDocument = vim.lsp.util.make_text_document_params(bufnr),
-      position = { line = line - 1, character = col - 1 },
-      context = { includeDeclaration = true }
-    }
-
-    local responses = vim.lsp.buf_request_sync(bufnr, 'textDocument/references', params, 5000)
-    if not responses then
-      return { error = "No references response" }
-    end
-
-    local results = {}
-    for _, resp in pairs(responses) do
-      if resp.result then
-        for _, ref in ipairs(resp.result) do
-          table.insert(results, {
-            file = vim.uri_to_fname(ref.uri),
-            line = ref.range.start.line + 1,
-            col = ref.range.start.character + 1
-          })
-        end
-      end
-    end
-
-    return results
-  `, [file, line, col]);
-
+  const result = await nvim.lua(lua.references, [file, line, col]);
   disconnect(socket);
   return result;
 }
 
 async function getCompletions(file: string, line: number, col: number) {
   const { nvim, socket } = connectToNvim();
-
-  const result = await nvim.lua(`
-    local file, line, col = ...
-
-    local bufnr = vim.fn.bufnr(file)
-    if bufnr == -1 then
-      vim.cmd('badd ' .. file)
-      bufnr = vim.fn.bufnr(file)
-    end
-
-    local params = {
-      textDocument = vim.lsp.util.make_text_document_params(bufnr),
-      position = { line = line - 1, character = col - 1 }
-    }
-
-    local responses = vim.lsp.buf_request_sync(bufnr, 'textDocument/completion', params, 3000)
-    if not responses then
-      return { error = "No completion response" }
-    end
-
-    local results = {}
-    for _, resp in pairs(responses) do
-      if resp.result then
-        local items = resp.result.items or resp.result
-        for i, item in ipairs(items) do
-          if i > 20 then break end  -- limit results
-          table.insert(results, {
-            label = item.label,
-            kind = item.kind,
-            detail = item.detail
-          })
-        end
-      end
-    end
-
-    return results
-  `, [file, line, col]);
-
+  const result = await nvim.lua(lua.completions, [file, line, col]);
   disconnect(socket);
   return result;
 }
