@@ -55,3 +55,48 @@ To skip the prompt, set the `NVIM_LISTEN_ADDRESS` environment variable:
 ```bash
 export NVIM_LISTEN_ADDRESS=/path/to/nvim/socket
 ```
+
+## MCP Server
+
+An MCP (Model Context Protocol) server is included so AI agents like Claude Code can use Neovim's LSP features as tools.
+
+### Running
+
+```bash
+bun run mcp.ts
+```
+
+### Socket Selection
+
+The MCP server uses non-interactive socket selection:
+- If `NVIM_LISTEN_ADDRESS` is set, it uses that socket
+- If exactly one Neovim instance is running, it auto-connects
+- If multiple instances are found, it returns an error asking you to set `NVIM_LISTEN_ADDRESS`
+
+### Available Tools
+
+| Tool | Input | Description |
+|------|-------|-------------|
+| `get_diagnostics` | `{ file?: string }` | Get LSP diagnostics, optionally filtered to a file |
+| `get_hover` | `{ file, line, col }` | Get hover/type info at a position (1-based) |
+| `get_definition` | `{ file, line, col }` | Get definition location for a symbol |
+| `get_references` | `{ file, line, col }` | Find all references to a symbol |
+| `get_completions` | `{ file, line, col }` | Get completion candidates at a position |
+
+### Claude Code Configuration
+
+Add to `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "nvim-lsp": {
+      "command": "bun",
+      "args": ["run", "/path/to/nvim-lsp-bridge/mcp.ts"],
+      "env": {
+        "NVIM_LISTEN_ADDRESS": "/path/to/nvim/socket"
+      }
+    }
+  }
+}
+```
