@@ -1,6 +1,6 @@
 import { attach, type NeovimClient } from "neovim";
 import { createConnection, type Socket } from "net";
-import { readdirSync, statSync } from "fs";
+import { readdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -19,42 +19,122 @@ const lua = {
   completions: await readLua("completions"),
 };
 
-function findNeovimSocket(): string {
+interface NvimInstance {
+  socketPath: string;
+  cwd: string;
+}
+
+function findAllNeovimSockets(): string[] {
+  // On macOS, Neovim sockets are in $TMPDIR/nvim.$USER/*/nvim.*.0
+  const user = process.env.USER || "unknown";
+  const nvimDir = join(tmpdir(), `nvim.${user}`);
+  const sockets: string[] = [];
+
+  try {
+    const subdirs = readdirSync(nvimDir);
+    for (const sub of subdirs) {
+      const subPath = join(nvimDir, sub);
+      try {
+        const files = readdirSync(subPath);
+        for (const f of files) {
+          if (f.startsWith("nvim.") && f.endsWith(".0")) {
+            sockets.push(join(subPath, f));
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+
+  return sockets;
+}
+
+async function getNvimInfo(socketPath: string): Promise<NvimInstance | null> {
+  try {
+    const socket = createConnection(socketPath);
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    const nvim = attach({ reader: socket, writer: socket });
+    const cwd = await nvim.lua("return vim.fn.getcwd()", []);
+    socket.destroy();
+    return { socketPath, cwd: String(cwd) };
+  } catch {
+    return null;
+  }
+}
+
+function promptChoice(question: string): Promise<string> {
+  process.stderr.write(question);
+  return new Promise((resolve) => {
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+    process.stdin.once("data", (data) => {
+      process.stdin.pause();
+      resolve(data.toString().trim());
+    });
+  });
+}
+
+async function selectNeovimSocket(): Promise<string> {
   if (process.env.NVIM_LISTEN_ADDRESS) {
     return process.env.NVIM_LISTEN_ADDRESS;
   }
 
-  // On macOS, Neovim sockets are in $TMPDIR/nvim.$USER/*/nvim.*.0
-  const user = process.env.USER || "unknown";
-  const nvimDir = join(tmpdir(), `nvim.${user}`);
+  const sockets = findAllNeovimSockets();
 
-  try {
-    const subdirs = readdirSync(nvimDir);
-    let newest = { path: "", mtime: 0 };
-    for (const sub of subdirs) {
-      const subPath = join(nvimDir, sub);
-      const files = readdirSync(subPath);
-      for (const f of files) {
-        if (f.startsWith("nvim.") && f.endsWith(".0")) {
-          const fullPath = join(subPath, f);
-          const st = statSync(fullPath);
-          if (st.mtimeMs > newest.mtime) {
-            newest = { path: fullPath, mtime: st.mtimeMs };
-          }
-        }
-      }
-    }
-    if (newest.path) return newest.path;
-  } catch {}
+  if (sockets.length === 0) {
+    console.error(
+      "No Neovim instances found.\n\n" +
+      "Start Neovim or set NVIM_LISTEN_ADDRESS to a socket path.\n" +
+      "Example: export NVIM_LISTEN_ADDRESS=/tmp/nvim.sock"
+    );
+    process.exit(1);
+  }
 
-  throw new Error(
-    "No Neovim socket found. Start Neovim with: nvim --listen /tmp/nvim.sock\n" +
-    "Or set NVIM_LISTEN_ADDRESS environment variable."
+  if (sockets.length === 1) {
+    return sockets[0]!;
+  }
+
+  // Multiple sockets found - connect to each to get identifying info
+  const instances = (await Promise.all(sockets.map(getNvimInfo))).filter(
+    (i): i is NvimInstance => i !== null
   );
+
+  if (instances.length === 0) {
+    console.error(
+      "Found Neovim sockets but could not connect to any of them.\n" +
+      "The Neovim instances may have exited. Try restarting Neovim."
+    );
+    process.exit(1);
+  }
+
+  if (instances.length === 1) {
+    return instances[0]!.socketPath;
+  }
+
+  process.stderr.write("Multiple Neovim instances found:\n\n");
+  for (let i = 0; i < instances.length; i++) {
+    process.stderr.write(`  ${i + 1}) ${instances[i]!.cwd}\n`);
+  }
+  process.stderr.write(
+    "\nTip: Set NVIM_LISTEN_ADDRESS to skip this prompt.\n" +
+    "Example: export NVIM_LISTEN_ADDRESS=/path/to/nvim/socket\n\n"
+  );
+
+  const answer = await promptChoice(`Select instance (1-${instances.length}): `);
+  const idx = parseInt(answer) - 1;
+
+  if (isNaN(idx) || idx < 0 || idx >= instances.length) {
+    console.error("Invalid selection.");
+    process.exit(1);
+  }
+
+  return instances[idx]!.socketPath;
 }
 
-function connectToNvim(): { nvim: NeovimClient; socket: Socket } {
-  const socketPath = findNeovimSocket();
+async function connectToNvim(): Promise<{ nvim: NeovimClient; socket: Socket }> {
+  const socketPath = await selectNeovimSocket();
   const socket = createConnection(socketPath);
   const nvim = attach({ reader: socket, writer: socket });
   return { nvim, socket };
@@ -65,7 +145,7 @@ function disconnect(socket: Socket): void {
 }
 
 async function getDiagnostics(file?: string) {
-  const { nvim, socket } = connectToNvim();
+  const { nvim, socket } = await connectToNvim();
   const luaArgs = file ? [file] : [];
   const diagnostics = await nvim.lua(lua.diagnostics, luaArgs);
   disconnect(socket);
@@ -73,28 +153,28 @@ async function getDiagnostics(file?: string) {
 }
 
 async function getHover(file: string, line: number, col: number) {
-  const { nvim, socket } = connectToNvim();
+  const { nvim, socket } = await connectToNvim();
   const result = await nvim.lua(lua.hover, [file, line, col]);
   disconnect(socket);
   return result;
 }
 
 async function getDefinition(file: string, line: number, col: number) {
-  const { nvim, socket } = connectToNvim();
+  const { nvim, socket } = await connectToNvim();
   const result = await nvim.lua(lua.definition, [file, line, col]);
   disconnect(socket);
   return result;
 }
 
 async function getReferences(file: string, line: number, col: number) {
-  const { nvim, socket } = connectToNvim();
+  const { nvim, socket } = await connectToNvim();
   const result = await nvim.lua(lua.references, [file, line, col]);
   disconnect(socket);
   return result;
 }
 
 async function getCompletions(file: string, line: number, col: number) {
-  const { nvim, socket } = connectToNvim();
+  const { nvim, socket } = await connectToNvim();
   const result = await nvim.lua(lua.completions, [file, line, col]);
   disconnect(socket);
   return result;
