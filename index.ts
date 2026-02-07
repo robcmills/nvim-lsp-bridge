@@ -113,13 +113,21 @@ async function selectNeovimSocket(): Promise<string> {
     return instances[0]!.socketPath;
   }
 
-  process.stderr.write("Multiple Neovim instances found:\n\n");
+  const cyan = "\x1b[1;36m";
+  const gray = "\x1b[38;5;248m";
+  const green = "\x1b[32m";
+  const yellow = "\x1b[33m";
+  const magenta = "\x1b[35m";
+  const orange = "\x1b[38;5;214m";
+  const reset = "\x1b[0m";
+
+  process.stderr.write(`${orange}Multiple Neovim instances found:${reset}\n\n`);
   for (let i = 0; i < instances.length; i++) {
-    process.stderr.write(`  ${i + 1}) ${instances[i]!.cwd}\n`);
+    process.stderr.write(`  ${cyan}${i + 1}) ${instances[i]!.cwd}${reset}\n     ${gray}${instances[i]!.socketPath}${reset}\n`);
   }
   process.stderr.write(
-    "\nTip: Set NVIM_LISTEN_ADDRESS to skip this prompt.\n" +
-    "Example: export NVIM_LISTEN_ADDRESS=/path/to/nvim/socket\n\n"
+    `\n${gray}Tip: Set ${cyan}NVIM_LISTEN_ADDRESS${gray} to skip this prompt.${reset}\n` +
+    `${gray}Example:${reset} ${green}export${reset} ${cyan}NVIM_LISTEN_ADDRESS${reset}${yellow}=${reset}${magenta}/path/to/nvim/socket${reset}\n\n`
   );
 
   const answer = await promptChoice(`Select instance (1-${instances.length}): `);
