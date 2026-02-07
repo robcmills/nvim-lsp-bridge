@@ -271,17 +271,20 @@ async function main() {
         result = await getDiagnostics(args[0]);
         break;
       case "hover":
-        result = await getHover(args[0], parseInt(args[1]), parseInt(args[2]));
-        break;
       case "definition":
-        result = await getDefinition(args[0], parseInt(args[1]), parseInt(args[2]));
-        break;
       case "references":
-        result = await getReferences(args[0], parseInt(args[1]), parseInt(args[2]));
+      case "completions": {
+        const file = args[0];
+        const line = args[1];
+        const col = args[2];
+        if (!file || !line || !col) {
+          console.error(`Usage: nvim-lsp ${command} <file> <line> <col>`);
+          process.exit(1);
+        }
+        const fns = { hover: getHover, definition: getDefinition, references: getReferences, completions: getCompletions };
+        result = await fns[command](file, parseInt(line), parseInt(col));
         break;
-      case "completions":
-        result = await getCompletions(args[0], parseInt(args[1]), parseInt(args[2]));
-        break;
+      }
       default:
         console.error(`Usage: nvim-lsp <command> [args...]
 
