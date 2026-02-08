@@ -8,7 +8,7 @@ if not vim.api.nvim_buf_is_loaded(bufnr) then
   vim.fn.bufload(bufnr)
 end
 
--- Read current disk content and sync to buffer
+-- Check if buffer content differs from disk
 local ok, disk_lines = pcall(vim.fn.readfile, file)
 if not ok then
   return { error = "Could not read file: " .. file }
@@ -18,8 +18,13 @@ local buf_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 local changed = not vim.deep_equal(buf_lines, disk_lines)
 
 if changed then
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, disk_lines)
-  vim.bo[bufnr].modified = false
+  -- Use :edit! to reload from disk — this triggers the LSP on_reload callback
+  -- which sends didClose + didOpen to ALL attached clients (full resync)
+  vim.api.nvim_buf_call(bufnr, function()
+    vim.cmd('edit!')
+  end)
+  -- Refresh bufnr in case it changed during reload
+  bufnr = vim.fn.bufnr(file)
 end
 
 -- Ensure LSP is attached
@@ -42,20 +47,27 @@ if #clients == 0 then
   changed = true
 end
 
--- If content changed or LSP just attached, wait for diagnostics to settle
+-- If content changed or LSP just attached, trigger save notification and wait for diagnostics
 if changed then
-  local got_update = false
+  -- Trigger BufWritePost so Neovim's built-in LSP handler sends didSave to all clients
+  -- This is needed for on-save linters like ESLint
+  vim.api.nvim_exec_autocmds('BufWritePost', { buffer = bufnr })
+
+  -- Wait for diagnostics to settle: no DiagnosticChanged for 500ms, or 10s total
+  local got_first = false
+  local last_update = 0
   local group = vim.api.nvim_create_augroup('nvim_lsp_bridge_sync', { clear = true })
   vim.api.nvim_create_autocmd('DiagnosticChanged', {
     group = group,
     buffer = bufnr,
-    once = true,
     callback = function()
-      got_update = true
+      got_first = true
+      last_update = vim.uv.now()
     end
   })
-  -- Wait up to 10s for LSP to publish diagnostics
-  vim.wait(10000, function() return got_update end, 50)
+  vim.wait(10000, function()
+    return got_first and (vim.uv.now() - last_update) >= 500
+  end, 50)
   pcall(vim.api.nvim_del_augroup_by_id, group)
 end
 
