@@ -83,20 +83,17 @@ The MCP server uses non-interactive socket selection:
 | `get_references` | `{ file, line, col }` | Find all references to a symbol |
 | `get_completions` | `{ file, line, col }` | Get completion candidates at a position |
 
-### Claude Code Configuration
 
-Add to `.claude/settings.json`:
+### Claude Code Integration
 
-```json
-{
-  "mcpServers": {
-    "nvim-lsp": {
-      "command": "bun",
-      "args": ["run", "/path/to/nvim-lsp-bridge/mcp.ts"],
-      "env": {
-        "NVIM_LISTEN_ADDRESS": "/path/to/nvim/socket"
-      }
-    }
-  }
-}
+Add the MCP server to Claude Code:
+
+```bash
+claude mcp add-json --scope user nvim-lsp-bridge '{"type":"stdio","command":"bun","args":["run","/path/to/nvim-lsp-bridge/mcp.ts"],"env":{"NVIM_LISTEN_ADDRESS":"/path/to/nvim/socket"}}'
 ```
+
+Replace `/path/to/nvim-lsp-bridge/mcp.ts` with the absolute path to `mcp.ts` in your clone of this repo, and `/path/to/nvim/socket` with your Neovim socket path.
+
+Restart Claude Code for the tools to become available.
+
+You can confirm the server was added by running `claude mcp list`.
