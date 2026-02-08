@@ -2,8 +2,7 @@ local file, line, col = ...
 
 local bufnr = vim.fn.bufnr(file)
 if bufnr == -1 then
-  vim.cmd('badd ' .. file)
-  bufnr = vim.fn.bufnr(file)
+  return { error = "Buffer not found for " .. file .. " (sync_buffer should be called first)" }
 end
 
 local params = {

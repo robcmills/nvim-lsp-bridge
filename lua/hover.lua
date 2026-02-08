@@ -1,16 +1,8 @@
 local file, line, col = ...
 
--- Find or open the buffer
 local bufnr = vim.fn.bufnr(file)
 if bufnr == -1 then
-  vim.cmd('badd ' .. file)
-  bufnr = vim.fn.bufnr(file)
-end
-
--- Get LSP clients for this buffer
-local clients = vim.lsp.get_clients({ bufnr = bufnr })
-if #clients == 0 then
-  return { error = "No LSP client attached to " .. file }
+  return { error = "Buffer not found for " .. file .. " (sync_buffer should be called first)" }
 end
 
 -- Synchronous hover request

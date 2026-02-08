@@ -12,6 +12,7 @@ function readLua(name: string): Promise<string> {
 
 // Cache lua scripts at startup
 export const lua = {
+  syncBuffer: await readLua("sync_buffer"),
   diagnostics: await readLua("diagnostics"),
   hover: await readLua("hover"),
   definition: await readLua("definition"),
@@ -124,36 +125,52 @@ export function disconnect(socket: Socket): void {
 
 export async function getDiagnostics(selectSocket: SocketSelector, file?: string) {
   const { nvim, socket } = await connectToNvim(selectSocket);
-  const luaArgs = file ? [file] : [];
-  const diagnostics = await nvim.lua(lua.diagnostics, luaArgs);
-  disconnect(socket);
-  return diagnostics;
+  try {
+    if (file) {
+      await nvim.lua(lua.syncBuffer, [file]);
+    }
+    return await nvim.lua(lua.diagnostics, file ? [file] : []);
+  } finally {
+    disconnect(socket);
+  }
 }
 
 export async function getHover(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
-  const result = await nvim.lua(lua.hover, [file, line, col]);
-  disconnect(socket);
-  return result;
+  try {
+    await nvim.lua(lua.syncBuffer, [file]);
+    return await nvim.lua(lua.hover, [file, line, col]);
+  } finally {
+    disconnect(socket);
+  }
 }
 
 export async function getDefinition(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
-  const result = await nvim.lua(lua.definition, [file, line, col]);
-  disconnect(socket);
-  return result;
+  try {
+    await nvim.lua(lua.syncBuffer, [file]);
+    return await nvim.lua(lua.definition, [file, line, col]);
+  } finally {
+    disconnect(socket);
+  }
 }
 
 export async function getReferences(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
-  const result = await nvim.lua(lua.references, [file, line, col]);
-  disconnect(socket);
-  return result;
+  try {
+    await nvim.lua(lua.syncBuffer, [file]);
+    return await nvim.lua(lua.references, [file, line, col]);
+  } finally {
+    disconnect(socket);
+  }
 }
 
 export async function getCompletions(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
-  const result = await nvim.lua(lua.completions, [file, line, col]);
-  disconnect(socket);
-  return result;
+  try {
+    await nvim.lua(lua.syncBuffer, [file]);
+    return await nvim.lua(lua.completions, [file, line, col]);
+  } finally {
+    disconnect(socket);
+  }
 }
