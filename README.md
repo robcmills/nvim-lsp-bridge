@@ -2,6 +2,8 @@
 
 A CLI tool that connects to a running Neovim instance via its RPC socket and exposes LSP features as JSON output. This lets external tools (like AI agents) query Neovim's LSP for diagnostics, hover info, definitions, references, and completions.
 
+Includes a [Model Context Protocol](https://github.com/ModelContextProtocol/model-context-protocol) server for AI agents to use.
+
 ## Install
 
 ```bash
