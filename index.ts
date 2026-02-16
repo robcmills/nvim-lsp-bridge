@@ -21,15 +21,39 @@ function promptChoice(question: string): Promise<string> {
   });
 }
 
+async function discoverInstances(): Promise<NvimInstance[]> {
+  const sockets = findAllNeovimSockets();
+
+  if (sockets.length === 0) {
+    return [];
+  }
+
+  return (await Promise.all(sockets.map(getNvimInfo))).filter(
+    (i): i is NvimInstance => i !== null
+  );
+}
+
+function formatInstanceList(instances: NvimInstance[]): string {
+  const cyan = "\x1b[1;36m";
+  const gray = "\x1b[38;5;248m";
+  const reset = "\x1b[0m";
+
+  let output = "";
+  for (let i = 0; i < instances.length; i++) {
+    output += `  ${cyan}${i + 1}) ${instances[i]!.cwd}${reset}\n     ${gray}${instances[i]!.socketPath}${reset}\n`;
+  }
+  return output;
+}
+
 function createInteractiveSocketSelector(): SocketSelector {
   return async () => {
     if (process.env.NVIM_LISTEN_ADDRESS) {
       return process.env.NVIM_LISTEN_ADDRESS;
     }
 
-    const sockets = findAllNeovimSockets();
+    const instances = await discoverInstances();
 
-    if (sockets.length === 0) {
+    if (instances.length === 0) {
       console.error(
         "No Neovim instances found.\n\n" +
         "Start Neovim or set NVIM_LISTEN_ADDRESS to a socket path.\n" +
@@ -38,38 +62,20 @@ function createInteractiveSocketSelector(): SocketSelector {
       process.exit(1);
     }
 
-    if (sockets.length === 1) {
-      return sockets[0]!;
-    }
-
-    const instances = (await Promise.all(sockets.map(getNvimInfo))).filter(
-      (i): i is NvimInstance => i !== null
-    );
-
-    if (instances.length === 0) {
-      console.error(
-        "Found Neovim sockets but could not connect to any of them.\n" +
-        "The Neovim instances may have exited. Try restarting Neovim."
-      );
-      process.exit(1);
-    }
-
     if (instances.length === 1) {
       return instances[0]!.socketPath;
     }
 
+    const green = "\x1b[32m";
     const cyan = "\x1b[1;36m";
     const gray = "\x1b[38;5;248m";
-    const green = "\x1b[32m";
     const yellow = "\x1b[33m";
     const magenta = "\x1b[35m";
     const orange = "\x1b[38;5;214m";
     const reset = "\x1b[0m";
 
     process.stderr.write(`${orange}Multiple Neovim instances found:${reset}\n\n`);
-    for (let i = 0; i < instances.length; i++) {
-      process.stderr.write(`  ${cyan}${i + 1}) ${instances[i]!.cwd}${reset}\n     ${gray}${instances[i]!.socketPath}${reset}\n`);
-    }
+    process.stderr.write(formatInstanceList(instances));
     process.stderr.write(
       `\n${gray}Tip: Set ${cyan}NVIM_LISTEN_ADDRESS${gray} to skip this prompt.${reset}\n` +
       `${gray}Example:${reset} ${green}export${reset} ${cyan}NVIM_LISTEN_ADDRESS${reset}${yellow}=${reset}${magenta}/path/to/nvim/socket${reset}\n\n`
@@ -87,6 +93,18 @@ function createInteractiveSocketSelector(): SocketSelector {
   };
 }
 
+async function listInstances(): Promise<void> {
+  const instances = await discoverInstances();
+
+  if (instances.length === 0) {
+    console.error("No Neovim instances found.");
+    process.exit(1);
+  }
+
+  process.stderr.write(`\nFound ${instances.length} Neovim instance(s):\n\n`);
+  process.stderr.write(formatInstanceList(instances));
+}
+
 const selectSocket = createInteractiveSocketSelector();
 const command = process.argv[2];
 const args = process.argv.slice(3);
@@ -96,6 +114,10 @@ async function main() {
     let result: unknown;
 
     switch (command) {
+      case "list":
+        await listInstances();
+        process.exit(0);
+        break;
       case "diagnostics":
         result = await getDiagnostics(selectSocket, args[0]);
         break;
@@ -118,6 +140,7 @@ async function main() {
         console.error(`Usage: nvim-lsp <command> [args...]
 
 Commands:
+  list                            List Neovim instances and sockets
   diagnostics [file]              Get LSP diagnostics
   hover <file> <line> <col>       Get hover/type info
   definition <file> <line> <col>  Go to definition

@@ -20,6 +20,7 @@ bun run index.ts <command> [args...]
 
 | Command | Args | Description |
 |---------|------|-------------|
+| `list` | | List all running Neovim instances and their sockets |
 | `diagnostics` | `[file]` | Get LSP diagnostics (optionally filtered to a file) |
 | `hover` | `<file> <line> <col>` | Get hover/type information at a position |
 | `definition` | `<file> <line> <col>` | Get definition location for a symbol |
@@ -29,6 +30,9 @@ bun run index.ts <command> [args...]
 ### Examples
 
 ```bash
+# List running Neovim instances
+bun run index.ts list
+
 # Get all diagnostics
 bun run index.ts diagnostics
 
