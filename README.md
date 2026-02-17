@@ -62,6 +62,11 @@ To skip the prompt, set the `NVIM_LISTEN_ADDRESS` environment variable:
 export NVIM_LISTEN_ADDRESS=/path/to/nvim/socket
 ```
 
+You can manually specify the socket path when starting Neovim:
+```bash
+nvim --listen /tmp/nvim.sock
+```
+
 ## MCP Server
 
 An MCP (Model Context Protocol) server is included so AI agents like Claude Code can use Neovim's LSP features as tools.
