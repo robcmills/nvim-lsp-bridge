@@ -3,30 +3,25 @@
    The following is stdout from a claude code session:
 
 ```
-❯ Check for type errors on edited files using the nvim-lsp diagnostics tool 
+❯ Check for type errors on edited files using the nvim-lsp diagnostics tool
 
-⏺ nvim-lsp-bridge - get_diagnostics (MCP)(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDia
-                                         log/MediaDetailDialog.tsx")
-  ⎿  [
+⏺ get_diagnostics(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDialog/MediaDetailDialog.tsx")
+  ⎿  [
        {
          "severity": 1,
      … +10 lines (ctrl+o to expand)
 
-⏺ nvim-lsp-bridge - get_diagnostics (MCP)(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDia
-                                         log/MediaSidebar/MediaSidebar.tsx")
-  ⎿  []
+⏺ get_diagnostics(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDialog/MediaSidebar/MediaSidebar.tsx")
+  ⎿  []
 
-⏺ nvim-lsp-bridge - get_diagnostics (MCP)(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDia
-                                         log/MediaSidebar/InfoView/InfoView.tsx")
-  ⎿  []
+⏺ get_diagnostics(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDialog/MediaSidebar/InfoView/InfoView.tsx")
+  ⎿  []
 
-⏺ nvim-lsp-bridge - get_diagnostics (MCP)(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDia
-                                         log/MediaSidebar/LocationView/LocationView.tsx")
-  ⎿  []
+⏺ get_diagnostics(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDialog/MediaSidebar/LocationView/LocationView.tsx")
+  ⎿  []
 
-⏺ nvim-lsp-bridge - get_diagnostics (MCP)(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDia
-                                         log/MediaSidebar/DetailView.tsx")
-  ⎿  []
+⏺ get_diagnostics(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDialog/MediaSidebar/DetailView.tsx")
+  ⎿  []
 
 ⏺ The LSP may have a stale cache for MediaSidebar's types. Let me verify the interface was actually updated.
 
@@ -35,9 +30,8 @@
 ⏺ The interface does include isMobile. The LSP diagnostic is stale — likely it hasn't re-evaluated MediaSidebar.tsx yet. Let
   me re-check after a moment.
 
-⏺ nvim-lsp-bridge - get_diagnostics (MCP)(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDia
-                                         log/MediaDetailDialog.tsx")
-  ⎿  []
+⏺ get_diagnostics(file: "/Users/robcmills/src/openspace/web/icedemon/src/js/site/media/MediaDetailDialog/MediaDetailDialog.tsx")
+  ⎿  []
 
 ⏺ All clear — zero diagnostics across all edited files. Here's a summary of the changes:
 ```

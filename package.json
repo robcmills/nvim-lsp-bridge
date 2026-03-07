@@ -4,8 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "cli": "bun run index.ts",
-    "mcp": "bun run mcp.ts"
+    "cli": "bun run index.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
@@ -14,8 +13,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
-    "neovim": "^5.4.0",
-    "zod": "^4.3.6"
+    "neovim": "^5.4.0"
   }
 }
