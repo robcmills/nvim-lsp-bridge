@@ -66,6 +66,19 @@ export async function getNvimInfo(socketPath: string): Promise<NvimInstance | nu
   }
 }
 
+export function findInstanceByCwd(instances: NvimInstance[]): NvimInstance | null {
+  const cwd = process.cwd();
+  // Prefer exact match, then longest prefix match (deepest parent)
+  let best: NvimInstance | null = null;
+  for (const inst of instances) {
+    if (cwd === inst.cwd) return inst;
+    if (cwd.startsWith(inst.cwd + "/") && (!best || inst.cwd.length > best.cwd.length)) {
+      best = inst;
+    }
+  }
+  return best;
+}
+
 export function createAutoSocketSelector(): SocketSelector {
   return async () => {
     if (process.env.NVIM_LISTEN_ADDRESS) {
@@ -99,9 +112,15 @@ export function createAutoSocketSelector(): SocketSelector {
       return instances[0]!.socketPath;
     }
 
+    // Try to match by current working directory
+    const match = findInstanceByCwd(instances);
+    if (match) {
+      return match.socketPath;
+    }
+
     throw new Error(
       `Multiple Neovim instances found (${instances.length}). ` +
-      "Set NVIM_LISTEN_ADDRESS to select one."
+      "Set NVIM_LISTEN_ADDRESS or run from a directory matching a Neovim instance."
     );
   };
 }

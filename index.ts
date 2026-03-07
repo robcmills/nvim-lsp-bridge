@@ -1,6 +1,7 @@
 import type { NvimInstance, SocketSelector } from "./lib";
 import {
   findAllNeovimSockets,
+  findInstanceByCwd,
   getNvimInfo,
   getDiagnostics,
   getHover,
@@ -64,6 +65,12 @@ function createInteractiveSocketSelector(): SocketSelector {
 
     if (instances.length === 1) {
       return instances[0]!.socketPath;
+    }
+
+    // Try to match by current working directory
+    const cwdMatch = findInstanceByCwd(instances);
+    if (cwdMatch) {
+      return cwdMatch.socketPath;
     }
 
     const green = "\x1b[32m";

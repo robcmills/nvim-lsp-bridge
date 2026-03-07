@@ -52,7 +52,7 @@ bun run index.ts completions src/main.ts 10 5
 
 ## Neovim Instance Selection
 
-The tool automatically discovers running Neovim instances by scanning socket files in `$TMPDIR`. If multiple instances are found, it prompts you to select one.
+The tool automatically discovers running Neovim instances by scanning socket files in `$TMPDIR`. When multiple instances are found, it automatically selects the one whose working directory matches your current directory (exact match or parent directory). If no match is found, it prompts you to select one.
 
 To skip the prompt, set the `NVIM_LISTEN_ADDRESS` environment variable:
 
