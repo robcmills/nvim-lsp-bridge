@@ -18,12 +18,12 @@ bun run index.ts <command> [args...]
 
 | Command | Args | Description |
 |---------|------|-------------|
-| `list` | | List all running Neovim instances and their sockets |
+| `completions` | `<file> <line> <col>` | Get completion candidates at a position |
+| `definition` | `<file> <line> <col>` | Get definition location for a symbol |
 | `diagnostics` | `[file]` | Get LSP diagnostics (optionally filtered to a file) |
 | `hover` | `<file> <line> <col>` | Get hover/type information at a position |
-| `definition` | `<file> <line> <col>` | Get definition location for a symbol |
+| `list` | | List all running Neovim instances and their sockets |
 | `references` | `<file> <line> <col>` | Find all references to a symbol |
-| `completions` | `<file> <line> <col>` | Get completion candidates at a position |
 
 ### Examples
 
