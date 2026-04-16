@@ -24,6 +24,7 @@ bun run index.ts <command> [args...]
 | `hover` | `<file> <line> <col>` | Get hover/type information at a position |
 | `list` | | List all running Neovim instances and their sockets |
 | `references` | `<file> <line> <col>` | Find all references to a symbol |
+| `sync` | `<file>` | Notify LSP of external file changes |
 
 ### Examples
 
@@ -48,6 +49,9 @@ bun run index.ts references src/main.ts 10 5
 
 # Get completions
 bun run index.ts completions src/main.ts 10 5
+
+# Sync a file after external changes
+bun run index.ts sync src/main.ts
 ```
 
 ## Neovim Instance Selection
@@ -64,3 +68,31 @@ You can manually specify the socket path when starting Neovim:
 ```bash
 nvim --listen /tmp/nvim.sock
 ```
+
+## Claude Code Hook
+
+You can configure a [Claude Code hook](https://docs.anthropic.com/en/docs/claude-code/hooks) to automatically sync files with Neovim's LSP whenever Claude edits or writes a file. This prevents stale diagnostics when an AI agent makes changes outside of Neovim.
+
+Add the following to your project's `.claude/settings.json` (or `~/.claude/settings.json` for all projects):
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | xargs -I {} bun run /path/to/nvim-lsp-bridge/index.ts sync {}"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Replace `/path/to/nvim-lsp-bridge` with the actual path to this project.
+
+The hook runs after every `Edit` or `Write` tool call. It reads the file path from the hook's JSON stdin and calls `nvim-lsp sync` to reload the buffer in Neovim, triggering a full LSP resync (including on-save linters like ESLint).

@@ -3,6 +3,7 @@ import {
   findAllNeovimSockets,
   findInstanceByCwd,
   getNvimInfo,
+  syncBuffer,
   getDiagnostics,
   getHover,
   getDefinition,
@@ -125,6 +126,15 @@ async function main() {
         await listInstances();
         process.exit(0);
         break;
+      case "sync": {
+        const syncFile = args[0];
+        if (!syncFile) {
+          console.error("Usage: nvim-lsp sync <file>");
+          process.exit(1);
+        }
+        result = await syncBuffer(selectSocket, syncFile);
+        break;
+      }
       case "diagnostics":
         result = await getDiagnostics(selectSocket, args[0]);
         break;
@@ -148,6 +158,7 @@ async function main() {
 
 Commands:
   list                            List Neovim instances and sockets
+  sync <file>                     Notify LSP of external file changes
   diagnostics [file]              Get LSP diagnostics
   hover <file> <line> <col>       Get hover/type info
   definition <file> <line> <col>  Go to definition

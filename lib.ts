@@ -50,18 +50,28 @@ export function findAllNeovimSockets(): string[] {
   return sockets;
 }
 
-export async function getNvimInfo(socketPath: string): Promise<NvimInstance | null> {
+export async function getNvimInfo(socketPath: string, timeoutMs = 2000): Promise<NvimInstance | null> {
+  let socket: Socket | null = null;
   try {
-    const socket = createConnection(socketPath);
+    socket = createConnection(socketPath);
+    const conn = socket;
     await new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve);
-      socket.once("error", reject);
+      conn.once("connect", resolve);
+      conn.once("error", reject);
     });
     const nvim = attach({ reader: socket, writer: socket });
-    const cwd = await nvim.lua("return vim.fn.getcwd()", []);
+    // Guard against nvim instances that accept connections but never respond
+    // (seen with nvim processes stuck on modal prompts or deadlocked event loops).
+    const cwd = await Promise.race([
+      nvim.lua("return vim.fn.getcwd()", []),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("nvim_exec_lua timed out")), timeoutMs)
+      ),
+    ]);
     socket.destroy();
     return { socketPath, cwd: String(cwd) };
   } catch {
+    socket?.destroy();
     return null;
   }
 }
@@ -142,11 +152,20 @@ export function disconnect(socket: Socket): void {
   socket.destroy();
 }
 
+export async function syncBuffer(selectSocket: SocketSelector, file: string) {
+  const { nvim, socket } = await connectToNvim(selectSocket);
+  try {
+    return await nvim.lua(lua.syncBuffer, [file]);
+  } finally {
+    disconnect(socket);
+  }
+}
+
 export async function getDiagnostics(selectSocket: SocketSelector, file?: string) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
     if (file) {
-      await nvim.lua(lua.syncBuffer, [file]);
+      await nvim.lua(lua.syncBuffer, [file, true]);
     }
     return await nvim.lua(lua.diagnostics, file ? [file] : []);
   } finally {
@@ -157,7 +176,7 @@ export async function getDiagnostics(selectSocket: SocketSelector, file?: string
 export async function getHover(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    await nvim.lua(lua.syncBuffer, [file]);
+    await nvim.lua(lua.syncBuffer, [file, true]);
     return await nvim.lua(lua.hover, [file, line, col]);
   } finally {
     disconnect(socket);
@@ -167,7 +186,7 @@ export async function getHover(selectSocket: SocketSelector, file: string, line:
 export async function getDefinition(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    await nvim.lua(lua.syncBuffer, [file]);
+    await nvim.lua(lua.syncBuffer, [file, true]);
     return await nvim.lua(lua.definition, [file, line, col]);
   } finally {
     disconnect(socket);
@@ -177,7 +196,7 @@ export async function getDefinition(selectSocket: SocketSelector, file: string, 
 export async function getReferences(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    await nvim.lua(lua.syncBuffer, [file]);
+    await nvim.lua(lua.syncBuffer, [file, true]);
     return await nvim.lua(lua.references, [file, line, col]);
   } finally {
     disconnect(socket);
@@ -187,7 +206,7 @@ export async function getReferences(selectSocket: SocketSelector, file: string, 
 export async function getCompletions(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    await nvim.lua(lua.syncBuffer, [file]);
+    await nvim.lua(lua.syncBuffer, [file, true]);
     return await nvim.lua(lua.completions, [file, line, col]);
   } finally {
     disconnect(socket);
