@@ -76,17 +76,70 @@ export async function getNvimInfo(socketPath: string, timeoutMs = 2000): Promise
   }
 }
 
-export function findInstanceByCwd(instances: NvimInstance[]): NvimInstance | null {
-  const cwd = process.cwd();
-  // Prefer exact match, then longest prefix match (deepest parent)
-  let best: NvimInstance | null = null;
+export function getGitCommonDir(dir: string): string | null {
+  try {
+    const proc = Bun.spawnSync({
+      cmd: ["git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    if (proc.exitCode !== 0) return null;
+    const out = proc.stdout.toString().trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+export function commonPathSuffixSegments(a: string, b: string): number {
+  const aSegs = a.split("/").filter(Boolean);
+  const bSegs = b.split("/").filter(Boolean);
+  let n = 0;
+  while (
+    n < aSegs.length &&
+    n < bSegs.length &&
+    aSegs[aSegs.length - 1 - n] === bSegs[bSegs.length - 1 - n]
+  ) {
+    n++;
+  }
+  return n;
+}
+
+export function findInstanceByCwd(
+  instances: NvimInstance[],
+  cwd: string = process.cwd(),
+  resolveGitCommonDir: (dir: string) => string | null = getGitCommonDir,
+): NvimInstance | null {
+  // 1. Exact match
   for (const inst of instances) {
     if (cwd === inst.cwd) return inst;
-    if (cwd.startsWith(inst.cwd + "/") && (!best || inst.cwd.length > best.cwd.length)) {
-      best = inst;
+  }
+
+  // 2. Longest prefix match (instance CWD is a parent of shell CWD)
+  let prefixBest: NvimInstance | null = null;
+  for (const inst of instances) {
+    if (cwd.startsWith(inst.cwd + "/") && (!prefixBest || inst.cwd.length > prefixBest.cwd.length)) {
+      prefixBest = inst;
     }
   }
-  return best;
+  if (prefixBest) return prefixBest;
+
+  // 3. Worktree fallback: same git common dir
+  const myCommonDir = resolveGitCommonDir(cwd);
+  if (!myCommonDir) return null;
+
+  const sameRepo = instances.filter((inst) => resolveGitCommonDir(inst.cwd) === myCommonDir);
+  if (sameRepo.length === 0) return null;
+  if (sameRepo.length === 1) return sameRepo[0]!;
+
+  // 4. Tie-break by longest common path suffix, then by cwd alphabetically
+  // for a deterministic pick. Once we know an instance shares the repo, any
+  // worktree's LSP can serve absolute file paths in the repo, so prefer
+  // auto-selection over interrupting automation with a prompt.
+  const scored = sameRepo
+    .map((inst) => ({ inst, score: commonPathSuffixSegments(cwd, inst.cwd) }))
+    .sort((a, b) => b.score - a.score || a.inst.cwd.localeCompare(b.inst.cwd));
+  return scored[0]!.inst;
 }
 
 export function createAutoSocketSelector(): SocketSelector {
