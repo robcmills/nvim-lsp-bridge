@@ -35,6 +35,11 @@ if bufnr == -1 then
   bufnr = vim.fn.bufnr(file, true)
   -- Mark as unlisted so it doesn't clutter the user's buffer list
   vim.api.nvim_set_option_value('buflisted', false, { buf = bufnr })
+  -- Bridge-created buffers are transient sync targets, not user editing sessions.
+  -- Disabling swapfile *before* the first disk read prevents this nvim instance
+  -- from grabbing the global swap-lock for `file`, which would otherwise wedge
+  -- any other nvim instance that has the file open behind an E325 modal prompt.
+  vim.api.nvim_set_option_value('swapfile', false, { buf = bufnr })
 end
 
 -- Ensure buffer is loaded (reads from disk if not yet loaded)
@@ -53,11 +58,23 @@ local changed = not vim.deep_equal(buf_lines, disk_lines)
 
 if changed then
   local was_listed = vim.api.nvim_get_option_value('buflisted', { buf = bufnr })
+  -- Belt-and-suspenders for the :edit! path: auto-respond 'e' (edit anyway) to
+  -- any SwapExists prompt, in case 'swapfile' didn't take effect or the user
+  -- already had this buffer open with swapfile on. Without this, a swap-conflict
+  -- prompt blocks the event loop indefinitely (wait_return/vgetc on kevent).
+  local swap_group = vim.api.nvim_create_augroup('nvim_lsp_bridge_swap', { clear = true })
+  vim.api.nvim_create_autocmd('SwapExists', {
+    group = swap_group,
+    callback = function()
+      vim.v.swapchoice = 'e'
+    end,
+  })
   -- Use :edit! to reload from disk — this triggers the LSP on_reload callback
   -- which sends didClose + didOpen to ALL attached clients (full resync)
   vim.api.nvim_buf_call(bufnr, function()
     vim.cmd('edit!')
   end)
+  pcall(vim.api.nvim_del_augroup_by_id, swap_group)
   -- Refresh bufnr in case it changed during reload
   bufnr = vim.fn.bufnr(file)
   -- edit! can re-list the buffer; restore unlisted state if it wasn't listed before

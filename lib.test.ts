@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findInstanceByCwd, parsePidFromSocket, type NvimInstance } from "./lib";
+import { findInstanceByCwd, lua, parsePidFromSocket, type NvimInstance } from "./lib";
 
 const inst = (cwd: string): NvimInstance => ({ socketPath: `/tmp/sock-${cwd}`, cwd });
 
@@ -16,6 +16,29 @@ describe("parsePidFromSocket", () => {
     expect(parsePidFromSocket("/tmp/foo.sock")).toBe(null);
     expect(parsePidFromSocket("/tmp/nvim.sock")).toBe(null);
     expect(parsePidFromSocket("/tmp/nvim.abc.0")).toBe(null);
+  });
+});
+
+describe("sync_buffer.lua swap-lock safety", () => {
+  // The bridge connects to a Neovim instance and may load a file that another
+  // nvim instance has open. Without these safeguards, the global swap-file lock
+  // triggers an E325 modal prompt that wedges the target instance's event loop.
+  // A real reproduction needs two nvim processes; these static checks at least
+  // catch accidental removal of either safety net.
+
+  test("disables 'swapfile' on bridge-created buffers before the first disk read", () => {
+    const script = lua.syncBuffer;
+    const swapOffIdx = script.indexOf("'swapfile', false");
+    const bufloadIdx = script.indexOf("vim.fn.bufload");
+    expect(swapOffIdx).toBeGreaterThan(-1);
+    expect(bufloadIdx).toBeGreaterThan(-1);
+    expect(swapOffIdx).toBeLessThan(bufloadIdx);
+  });
+
+  test("auto-answers 'e' to SwapExists around the :edit! reload", () => {
+    const script = lua.syncBuffer;
+    expect(script).toContain("SwapExists");
+    expect(script).toContain("vim.v.swapchoice = 'e'");
   });
 });
 
