@@ -1,7 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { findInstanceByCwd, type NvimInstance } from "./lib";
+import { findInstanceByCwd, parsePidFromSocket, type NvimInstance } from "./lib";
 
 const inst = (cwd: string): NvimInstance => ({ socketPath: `/tmp/sock-${cwd}`, cwd });
+
+describe("parsePidFromSocket", () => {
+  test("parses standard nvim socket name", () => {
+    expect(parsePidFromSocket("/tmp/nvim.rob/abc/nvim.12345.0")).toBe(12345);
+  });
+
+  test("parses higher listener indices", () => {
+    expect(parsePidFromSocket("/tmp/nvim.rob/abc/nvim.999.7")).toBe(999);
+  });
+
+  test("returns null for non-standard names", () => {
+    expect(parsePidFromSocket("/tmp/foo.sock")).toBe(null);
+    expect(parsePidFromSocket("/tmp/nvim.sock")).toBe(null);
+    expect(parsePidFromSocket("/tmp/nvim.abc.0")).toBe(null);
+  });
+});
 
 describe("findInstanceByCwd", () => {
   test("returns exact CWD match", () => {

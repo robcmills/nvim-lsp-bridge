@@ -1,8 +1,8 @@
 import type { NvimInstance, SocketSelector } from "./lib";
 import {
-  findAllNeovimSockets,
+  discoverInstances,
   findInstanceByCwd,
-  getNvimInfo,
+  pingNvim,
   syncBuffer,
   getDiagnostics,
   getHover,
@@ -23,28 +23,43 @@ function promptChoice(question: string): Promise<string> {
   });
 }
 
-async function discoverInstances(): Promise<NvimInstance[]> {
-  const sockets = findAllNeovimSockets();
-
-  if (sockets.length === 0) {
-    return [];
-  }
-
-  return (await Promise.all(sockets.map(getNvimInfo))).filter(
-    (i): i is NvimInstance => i !== null
+async function probeStates(instances: NvimInstance[]): Promise<("responsive" | "wedged")[]> {
+  return Promise.all(
+    instances.map(async (inst) => {
+      if (inst.state === "responsive") return "responsive";
+      return (await pingNvim(inst.socketPath)) ? "responsive" : "wedged";
+    }),
   );
 }
 
-function formatInstanceList(instances: NvimInstance[]): string {
+function formatInstanceList(
+  instances: NvimInstance[],
+  states?: ("responsive" | "wedged")[],
+): string {
   const cyan = "\x1b[1;36m";
   const gray = "\x1b[38;5;248m";
+  const red = "\x1b[31m";
   const reset = "\x1b[0m";
 
   let output = "";
   for (let i = 0; i < instances.length; i++) {
-    output += `  ${cyan}${i + 1}) ${instances[i]!.cwd}${reset}\n     ${gray}${instances[i]!.socketPath}${reset}\n`;
+    const inst = instances[i]!;
+    const wedged = states && states[i] === "wedged";
+    const badge = wedged ? ` ${red}[wedged]${reset}` : "";
+    output += `  ${cyan}${i + 1}) ${inst.cwd}${reset}${badge}\n     ${gray}${inst.socketPath}${reset}\n`;
   }
   return output;
+}
+
+async function confirmResponsive(inst: NvimInstance): Promise<void> {
+  if (inst.state === "responsive") return;
+  if (await pingNvim(inst.socketPath)) return;
+  const pidStr = inst.pid ? ` (PID ${inst.pid})` : "";
+  console.error(
+    `Matched Neovim at ${inst.cwd}${pidStr} but it is unresponsive — ` +
+    "check for a modal prompt (E325 swap-file, hit-enter, etc.).",
+  );
+  process.exit(1);
 }
 
 function createInteractiveSocketSelector(): SocketSelector {
@@ -65,14 +80,18 @@ function createInteractiveSocketSelector(): SocketSelector {
     }
 
     if (instances.length === 1) {
+      await confirmResponsive(instances[0]!);
       return instances[0]!.socketPath;
     }
 
     // Try to match by current working directory
     const cwdMatch = findInstanceByCwd(instances);
     if (cwdMatch) {
+      await confirmResponsive(cwdMatch);
       return cwdMatch.socketPath;
     }
+
+    const states = await probeStates(instances);
 
     const green = "\x1b[32m";
     const cyan = "\x1b[1;36m";
@@ -83,7 +102,7 @@ function createInteractiveSocketSelector(): SocketSelector {
     const reset = "\x1b[0m";
 
     process.stderr.write(`${orange}Multiple Neovim instances found:${reset}\n\n`);
-    process.stderr.write(formatInstanceList(instances));
+    process.stderr.write(formatInstanceList(instances, states));
     process.stderr.write(
       `\n${gray}Tip: Set ${cyan}NVIM_LISTEN_ADDRESS${gray} to skip this prompt.${reset}\n` +
       `${gray}Example:${reset} ${green}export${reset} ${cyan}NVIM_LISTEN_ADDRESS${reset}${yellow}=${reset}${magenta}/path/to/nvim/socket${reset}\n\n`
@@ -97,7 +116,17 @@ function createInteractiveSocketSelector(): SocketSelector {
       process.exit(1);
     }
 
-    return instances[idx]!.socketPath;
+    const picked = instances[idx]!;
+    if (states[idx] === "wedged") {
+      const pidStr = picked.pid ? ` (PID ${picked.pid})` : "";
+      console.error(
+        `Selected Neovim at ${picked.cwd}${pidStr} is unresponsive — ` +
+        "check for a modal prompt (E325 swap-file, hit-enter, etc.).",
+      );
+      process.exit(1);
+    }
+
+    return picked.socketPath;
   };
 }
 
@@ -109,8 +138,10 @@ async function listInstances(): Promise<void> {
     process.exit(1);
   }
 
+  const states = await probeStates(instances);
+
   process.stderr.write(`\nFound ${instances.length} Neovim instance(s):\n\n`);
-  process.stderr.write(formatInstanceList(instances));
+  process.stderr.write(formatInstanceList(instances, states));
 }
 
 const selectSocket = createInteractiveSocketSelector();

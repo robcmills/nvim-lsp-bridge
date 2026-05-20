@@ -1,7 +1,7 @@
 import { attach, type NeovimClient } from "neovim";
 import { createConnection, type Socket } from "net";
-import { readdirSync } from "fs";
-import { join } from "path";
+import { readdirSync, readlinkSync } from "fs";
+import { basename, join } from "path";
 import { tmpdir } from "os";
 
 const luaDir = join(import.meta.dir, "lua");
@@ -20,12 +20,72 @@ export const lua = {
   completions: await readLua("completions"),
 };
 
+export type NvimInstanceState = "responsive" | "wedged" | "unknown";
+
 export interface NvimInstance {
   socketPath: string;
   cwd: string;
+  pid?: number;
+  state?: NvimInstanceState;
 }
 
 export type SocketSelector = () => Promise<string>;
+
+export function parsePidFromSocket(socketPath: string): number | null {
+  const m = basename(socketPath).match(/^nvim\.(\d+)\.\d+$/);
+  if (!m) return null;
+  const pid = parseInt(m[1]!, 10);
+  return Number.isFinite(pid) ? pid : null;
+}
+
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function getCwdFromPid(pid: number): string | null {
+  if (process.platform === "linux") {
+    try {
+      return readlinkSync(`/proc/${pid}/cwd`);
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === "darwin") {
+    try {
+      const proc = Bun.spawnSync({
+        cmd: ["lsof", "-a", "-d", "cwd", "-p", String(pid), "-Fn"],
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      if (proc.exitCode !== 0) return null;
+      for (const line of proc.stdout.toString().split("\n")) {
+        if (line.startsWith("n")) return line.slice(1);
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// Derive cwd from kernel state via the PID embedded in the socket name. Works
+// even when the nvim event loop is wedged on a modal prompt. Returns null when
+// the socket name isn't the standard `nvim.<PID>.0` format, the PID is gone
+// (stale socket), or the cwd lookup fails — callers should fall back to RPC.
+export function getNvimInfoFromPid(socketPath: string): NvimInstance | null {
+  const pid = parsePidFromSocket(socketPath);
+  if (pid === null) return null;
+  if (!isProcessAlive(pid)) return null;
+  const cwd = getCwdFromPid(pid);
+  if (cwd === null) return null;
+  return { socketPath, cwd, pid, state: "unknown" };
+}
 
 export function findAllNeovimSockets(): string[] {
   const user = process.env.USER || "unknown";
@@ -69,11 +129,62 @@ export async function getNvimInfo(socketPath: string, timeoutMs = 2000): Promise
       ),
     ]);
     socket.destroy();
-    return { socketPath, cwd: String(cwd) };
+    return { socketPath, cwd: String(cwd), state: "responsive" };
   } catch {
     socket?.destroy();
     return null;
   }
+}
+
+// Lightweight liveness probe. Resolves true if nvim's event loop round-trips
+// a trivial Lua call within `timeoutMs`, false otherwise. Use this to confirm
+// an instance is usable before committing to it for an actual query.
+export async function pingNvim(socketPath: string, timeoutMs = 500): Promise<boolean> {
+  let socket: Socket | null = null;
+  try {
+    socket = createConnection(socketPath);
+    const conn = socket;
+    await new Promise<void>((resolve, reject) => {
+      conn.once("connect", resolve);
+      conn.once("error", reject);
+    });
+    const nvim = attach({ reader: socket, writer: socket });
+    await Promise.race([
+      nvim.lua("return 1", []),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("ping timed out")), timeoutMs)
+      ),
+    ]);
+    socket.destroy();
+    return true;
+  } catch {
+    socket?.destroy();
+    return false;
+  }
+}
+
+// Resolve every discoverable nvim socket to an NvimInstance. Tries PID-derived
+// discovery first (instant, works on wedged instances); falls back to an RPC
+// call for sockets whose names don't match the standard `nvim.<PID>.0` format.
+export async function discoverInstances(): Promise<NvimInstance[]> {
+  const sockets = findAllNeovimSockets();
+  const results: NvimInstance[] = [];
+
+  await Promise.all(
+    sockets.map(async (s) => {
+      const fromPid = getNvimInfoFromPid(s);
+      if (fromPid !== null) {
+        results.push(fromPid);
+        return;
+      }
+      const fromRpc = await getNvimInfo(s);
+      if (fromRpc !== null) {
+        results.push(fromRpc);
+      }
+    }),
+  );
+
+  return results;
 }
 
 export function findInstanceByCwd(
@@ -95,49 +206,53 @@ export function findInstanceByCwd(
   return prefixBest;
 }
 
+function describeUnresponsive(inst: NvimInstance): string {
+  const pidStr = inst.pid ? ` (PID ${inst.pid})` : "";
+  return (
+    `Matched Neovim at ${inst.cwd}${pidStr} but it is unresponsive — ` +
+    "check for a modal prompt (E325 swap-file, hit-enter, etc.)."
+  );
+}
+
 export function createAutoSocketSelector(): SocketSelector {
   return async () => {
     if (process.env.NVIM_LISTEN_ADDRESS) {
       return process.env.NVIM_LISTEN_ADDRESS;
     }
 
-    const sockets = findAllNeovimSockets();
-
-    if (sockets.length === 0) {
+    if (findAllNeovimSockets().length === 0) {
       throw new Error(
         "No Neovim instances found. Start Neovim or set NVIM_LISTEN_ADDRESS."
       );
     }
 
-    if (sockets.length === 1) {
-      return sockets[0]!;
-    }
-
-    // Multiple sockets — try to filter to live ones
-    const instances = (await Promise.all(sockets.map(getNvimInfo))).filter(
-      (i): i is NvimInstance => i !== null
-    );
+    const instances = await discoverInstances();
 
     if (instances.length === 0) {
       throw new Error(
-        "Found Neovim sockets but could not connect to any of them."
+        "Found Neovim sockets but their processes are gone (stale sockets)."
       );
     }
 
+    let chosen: NvimInstance;
     if (instances.length === 1) {
-      return instances[0]!.socketPath;
+      chosen = instances[0]!;
+    } else {
+      const match = findInstanceByCwd(instances);
+      if (!match) {
+        throw new Error(
+          `Multiple Neovim instances found (${instances.length}). ` +
+          "Set NVIM_LISTEN_ADDRESS or run from a directory matching a Neovim instance."
+        );
+      }
+      chosen = match;
     }
 
-    // Try to match by current working directory
-    const match = findInstanceByCwd(instances);
-    if (match) {
-      return match.socketPath;
+    if (chosen.state !== "responsive" && !(await pingNvim(chosen.socketPath))) {
+      throw new Error(describeUnresponsive(chosen));
     }
 
-    throw new Error(
-      `Multiple Neovim instances found (${instances.length}). ` +
-      "Set NVIM_LISTEN_ADDRESS or run from a directory matching a Neovim instance."
-    );
+    return chosen.socketPath;
   };
 }
 
