@@ -60,9 +60,8 @@ The tool automatically discovers running Neovim instances by scanning socket fil
 
 1. **Exact CWD match** — an instance whose working directory equals your shell's CWD.
 2. **Parent CWD match** — the deepest instance whose working directory is a parent of your shell's CWD.
-3. **Worktree match** — an instance whose `git rev-parse --git-common-dir` resolves to the same shared `.git` directory as your shell's CWD. This auto-picks across linked git worktrees (e.g., shell at `~/src/repo`, instance running at `~/src/repo-feature-branch`). If multiple worktree instances qualify, the one whose path shares the longest trailing path segments with your shell's CWD wins; remaining ties are broken by cwd alphabetical order.
 
-If your shell is not in a git repo and no path-based match is found, you're prompted to choose one.
+If no instance's CWD is an ancestor of your shell's CWD, you're prompted to choose one.
 
 To skip the prompt, set the `NVIM_LISTEN_ADDRESS` environment variable:
 
