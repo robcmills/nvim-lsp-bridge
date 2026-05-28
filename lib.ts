@@ -87,27 +87,59 @@ export function getNvimInfoFromPid(socketPath: string): NvimInstance | null {
   return { socketPath, cwd, pid, state: "unknown" };
 }
 
+// Neovim writes its RPC socket under `$TMPDIR/nvim.<user>/`. We can't just trust
+// our own `os.tmpdir()`: the Claude Code harness overrides `TMPDIR` (e.g. to
+// `/tmp/claude-501`), but nvim instances launched from a normal terminal/GUI use
+// the real per-user temp dir. So we scan every plausible temp root and dedupe.
+export function getTempRoots(): string[] {
+  const roots = new Set<string>();
+  roots.add(tmpdir());
+  if (process.env.TMPDIR) roots.add(process.env.TMPDIR);
+
+  // The canonical macOS per-user temp dir, unaffected by a `$TMPDIR` override.
+  if (process.platform === "darwin") {
+    try {
+      const proc = Bun.spawnSync({
+        cmd: ["getconf", "DARWIN_USER_TEMP_DIR"],
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      if (proc.exitCode === 0) {
+        const dir = proc.stdout.toString().trim();
+        if (dir) roots.add(dir);
+      }
+    } catch {}
+  }
+
+  // Linux default and a common fallback.
+  roots.add("/tmp");
+
+  return [...roots];
+}
+
 export function findAllNeovimSockets(): string[] {
   const user = process.env.USER || "unknown";
-  const nvimDir = join(tmpdir(), `nvim.${user}`);
-  const sockets: string[] = [];
+  const sockets = new Set<string>();
 
-  try {
-    const subdirs = readdirSync(nvimDir);
-    for (const sub of subdirs) {
-      const subPath = join(nvimDir, sub);
-      try {
-        const files = readdirSync(subPath);
-        for (const f of files) {
-          if (f.startsWith("nvim.") && f.endsWith(".0")) {
-            sockets.push(join(subPath, f));
+  for (const root of getTempRoots()) {
+    const nvimDir = join(root, `nvim.${user}`);
+    try {
+      const subdirs = readdirSync(nvimDir);
+      for (const sub of subdirs) {
+        const subPath = join(nvimDir, sub);
+        try {
+          const files = readdirSync(subPath);
+          for (const f of files) {
+            if (f.startsWith("nvim.") && f.endsWith(".0")) {
+              sockets.add(join(subPath, f));
+            }
           }
-        }
-      } catch {}
-    }
-  } catch {}
+        } catch {}
+      }
+    } catch {}
+  }
 
-  return sockets;
+  return [...sockets];
 }
 
 export async function getNvimInfo(socketPath: string, timeoutMs = 2000): Promise<NvimInstance | null> {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { findInstanceByCwd, lua, parsePidFromSocket, type NvimInstance } from "./lib";
+import { tmpdir } from "os";
+import { findInstanceByCwd, getTempRoots, lua, parsePidFromSocket, type NvimInstance } from "./lib";
 
 const inst = (cwd: string): NvimInstance => ({ socketPath: `/tmp/sock-${cwd}`, cwd });
 
@@ -39,6 +40,37 @@ describe("sync_buffer.lua swap-lock safety", () => {
     const script = lua.syncBuffer;
     expect(script).toContain("SwapExists");
     expect(script).toContain("vim.v.swapchoice = 'e'");
+  });
+});
+
+describe("getTempRoots", () => {
+  // The Claude Code harness overrides $TMPDIR (e.g. to /tmp/claude-501), but nvim
+  // instances launched from a normal terminal/GUI use the real per-user temp dir.
+  // getTempRoots must scan both so the bridge can still find those sockets.
+
+  test("includes os.tmpdir()", () => {
+    expect(getTempRoots()).toContain(tmpdir());
+  });
+
+  test("includes /tmp as a fallback", () => {
+    expect(getTempRoots()).toContain("/tmp");
+  });
+
+  test("returns no duplicate roots", () => {
+    const roots = getTempRoots();
+    expect(roots.length).toBe(new Set(roots).size);
+  });
+
+  test("on macOS, recovers the real per-user temp dir even when $TMPDIR is overridden", () => {
+    if (process.platform !== "darwin") return;
+    const original = process.env.TMPDIR;
+    try {
+      process.env.TMPDIR = "/tmp/claude-test-override";
+      expect(getTempRoots().some((r) => r.startsWith("/var/folders/"))).toBe(true);
+    } finally {
+      if (original === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = original;
+    }
   });
 });
 
