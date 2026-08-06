@@ -20,7 +20,7 @@ bun run index.ts <command> [args...]
 |---------|------|-------------|
 | `completions` | `<file> <line> <col>` | Get completion candidates at a position |
 | `definition` | `<file> <line> <col>` | Get definition location for a symbol |
-| `diagnostics` | `[file]` | Get LSP diagnostics (optionally filtered to a file) |
+| `diagnostics` | `[file ...]` | Get LSP diagnostics (optionally filtered to one or more files) |
 | `hover` | `<file> <line> <col>` | Get hover/type information at a position |
 | `list` | | List all running Neovim instances and their sockets |
 | `references` | `<file> <line> <col>` | Find all references to a symbol |
@@ -37,6 +37,9 @@ bun run index.ts diagnostics
 
 # Get diagnostics for a specific file
 bun run index.ts diagnostics src/main.ts
+
+# Get diagnostics for multiple files in one synchronized query
+bun run index.ts diagnostics src/main.ts src/store.ts docs/ARCHITECTURE.md
 
 # Get hover info at line 10, column 5
 bun run index.ts hover src/main.ts 10 5

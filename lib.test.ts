@@ -43,6 +43,14 @@ describe("sync_buffer.lua swap-lock safety", () => {
   });
 });
 
+describe("diagnostics.lua file filtering", () => {
+  test("accepts a list of file filters", () => {
+    expect(lua.diagnostics).toContain('type(filter_files) == "string"');
+    expect(lua.diagnostics).toContain("ipairs(filter_files)");
+    expect(lua.diagnostics).toContain("matches_filter(fname)");
+  });
+});
+
 describe("getTempRoots", () => {
   // The Claude Code harness overrides $TMPDIR (e.g. to /tmp/claude-501), but nvim
   // instances launched from a normal terminal/GUI use the real per-user temp dir.

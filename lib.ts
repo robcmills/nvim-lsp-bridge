@@ -314,13 +314,17 @@ export async function syncBuffer(selectSocket: SocketSelector, file: string) {
   }
 }
 
-export async function getDiagnostics(selectSocket: SocketSelector, file?: string) {
+export async function getDiagnostics(
+  selectSocket: SocketSelector,
+  files: string | string[] = [],
+) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    if (file) {
+    const requestedFiles = typeof files === "string" ? [files] : files;
+    for (const file of requestedFiles) {
       await nvim.lua(lua.syncBuffer, [file, true]);
     }
-    return await nvim.lua(lua.diagnostics, file ? [file] : []);
+    return await nvim.lua(lua.diagnostics, requestedFiles.length ? [requestedFiles] : []);
   } finally {
     disconnect(socket);
   }

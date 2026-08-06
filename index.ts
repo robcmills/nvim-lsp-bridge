@@ -167,7 +167,7 @@ async function main() {
         break;
       }
       case "diagnostics":
-        result = await getDiagnostics(selectSocket, args[0]);
+        result = await getDiagnostics(selectSocket, args);
         break;
       case "hover":
       case "definition":
@@ -190,7 +190,7 @@ async function main() {
 Commands:
   list                            List Neovim instances and sockets
   sync <file>                     Notify LSP of external file changes
-  diagnostics [file]              Get LSP diagnostics
+  diagnostics [file ...]          Get LSP diagnostics
   hover <file> <line> <col>       Get hover/type info
   definition <file> <line> <col>  Go to definition
   references <file> <line> <col>  Find references
