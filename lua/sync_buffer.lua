@@ -12,7 +12,7 @@ if bufnr == -1 and not ensure_buffer then
   local uri = vim.uri_from_fname(file)
   local notified = false
   for _, client in ipairs(vim.lsp.get_clients()) do
-    client.notify('workspace/didChangeWatchedFiles', {
+    client:notify('workspace/didChangeWatchedFiles', {
       changes = {
         { uri = uri, type = 2 } -- 2 = FileChangeType.Changed
       }
