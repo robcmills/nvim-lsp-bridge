@@ -207,7 +207,7 @@ Commands:
     const { writeFileSync } = await import("fs");
     writeFileSync("/tmp/nvim-bridge-error.log", String(err) + "\n" + (err instanceof Error ? err.stack : ""));
     await new Promise<void>((resolve) => {
-      process.stderr.write("Error: " + String(err) + "\n", () => resolve());
+      process.stderr.write("Error: " + (err instanceof Error ? err.message : String(err)) + "\n", () => resolve());
     });
     process.exit(1);
   }

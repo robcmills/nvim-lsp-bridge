@@ -57,6 +57,15 @@ bun run index.ts completions src/main.ts 10 5
 bun run index.ts sync src/main.ts
 ```
 
+## Diagnostics Errors
+
+`diagnostics <file ...>` never reports a clean `[]` it can't vouch for. It exits non-zero with an `Error:` on stderr instead when:
+
+- **A server never reports.** After syncing each file, the CLI waits for a fresh report from every client that always sends one, even for a clean file: TypeScript servers (`ts_ls`, `vtsls`, `typescript-tools`) and pull-diagnostic servers such as `eslint`. Push-only servers that may stay silent on a clean file aren't waited for. A `.ts`/`.js` file with no TypeScript server attached also counts as no report. The wait is 60s by default (a cold tsserver on a large project can take 30s+); set `NVIM_LSP_DIAGNOSTICS_TIMEOUT_MS` to change it. Retrying after a timeout is safe: a client that still hasn't reported for a buffer triggers a fresh resync.
+- **TypeScript isn't the workspace's own.** If the TypeScript server's root has no `node_modules/typescript` (in the root or a parent), or its `tsserver.js` isn't that copy, typescript-language-server has fallen back to a global TypeScript that can't resolve the project's imports. Run `pnpm install` in the root, then `:LspRestart`.
+
+The wait runs in the CLI, polling Neovim, so the editor stays responsive. Other commands (`sync`, `hover`, ...) wait up to 10s for the same reports but never fail on a timeout.
+
 ## Neovim Instance Selection
 
 The tool automatically discovers running Neovim instances by scanning socket files in `$TMPDIR`. When multiple instances are found, it tries to auto-select one in this order:

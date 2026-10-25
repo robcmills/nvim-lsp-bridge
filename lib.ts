@@ -1,7 +1,7 @@
 import { attach, type NeovimClient } from "neovim";
 import { createConnection, type Socket } from "net";
-import { readdirSync, readlinkSync } from "fs";
-import { basename, join } from "path";
+import { existsSync, readdirSync, readlinkSync, realpathSync } from "fs";
+import { basename, dirname, extname, join, sep } from "path";
 import { tmpdir } from "os";
 
 const luaDir = join(import.meta.dir, "lua");
@@ -13,6 +13,8 @@ function readLua(name: string): Promise<string> {
 // Cache lua scripts at startup
 export const lua = {
   syncBuffer: await readLua("sync_buffer"),
+  trackDiagnostics: await readLua("track_diagnostics"),
+  diagnosticsStatus: await readLua("diagnostics_status"),
   diagnostics: await readLua("diagnostics"),
   hover: await readLua("hover"),
   definition: await readLua("definition"),
@@ -305,25 +307,310 @@ export function disconnect(socket: Socket): void {
   socket.destroy();
 }
 
+// LSP clients that run tsserver. They publish a (possibly empty) diagnostic set
+// for every file they check, so "no report yet" always means "unknown".
+export const TYPESCRIPT_CLIENTS = ["ts_ls", "tsserver", "vtsls", "typescript-tools"];
+
+const TYPESCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
+
+// How long `diagnostics` waits for fresh reports. A cold tsserver on a large
+// project can take 30s+ to load before it publishes anything.
+export const DIAGNOSTICS_TIMEOUT_MS = Number(process.env.NVIM_LSP_DIAGNOSTICS_TIMEOUT_MS) || 60_000;
+// Other commands only wait as a courtesy and never fail on a timeout.
+const BEST_EFFORT_TIMEOUT_MS = 10_000;
+// Servers may report in several bursts; wait for this long a quiet spell.
+const QUIET_MS = 500;
+const POLL_MS = 100;
+
+export interface ClientStatus {
+  id: number;
+  name: string;
+  root_dir: string | null;
+  pull: boolean;
+  reported_at: number | null;
+  error: string | null;
+}
+
+interface SyncResult {
+  bufnr: number;
+  synced?: boolean;
+  since?: number;
+  notified?: boolean;
+  error?: string;
+}
+
+interface DiagnosticsStatus {
+  now: number;
+  pid: number;
+  buffers: { bufnr: number; clients: ClientStatus[] }[];
+}
+
+export function isTypescriptClient(name: string): boolean {
+  return TYPESCRIPT_CLIENTS.includes(name);
+}
+
+// A client whose report we must see before trusting a file's diagnostics:
+// tsserver-based clients, and pull-diagnostic clients (e.g. eslint), whose
+// textDocument/diagnostic responses always come back, even when empty.
+export function isRequiredClient(client: Pick<ClientStatus, "name" | "pull">): boolean {
+  return isTypescriptClient(client.name) || client.pull;
+}
+
+export type Freshness =
+  | { state: "ready" }
+  | { state: "waiting"; missing: string[] }
+  | { state: "error"; message: string };
+
+// Decide whether a buffer's diagnostics can be trusted. `since` is when the
+// sync started; reports before it are stale. Pass 0 when nothing was resynced:
+// any earlier report is then current.
+export function evaluateFreshness(
+  file: string,
+  clients: ClientStatus[],
+  since: number,
+  now: number,
+  quietMs = QUIET_MS,
+): Freshness {
+  const fresh = (c: ClientStatus) => c.reported_at !== null && c.reported_at >= since;
+
+  const failed = clients.find((c) => isRequiredClient(c) && fresh(c) && c.error);
+  if (failed) {
+    return { state: "error", message: `${failed.name} failed to report diagnostics for ${file}: ${failed.error}` };
+  }
+
+  const required = clients.filter(isRequiredClient);
+  const missing = required.filter((c) => !fresh(c)).map((c) => c.name);
+  if (
+    TYPESCRIPT_EXTENSIONS.has(extname(file)) &&
+    !clients.some((c) => isTypescriptClient(c.name))
+  ) {
+    missing.push("a TypeScript server (none attached)");
+  }
+  // With no client known to always report, settle for any one report.
+  if (required.length === 0 && missing.length === 0 && since > 0 && !clients.some(fresh)) {
+    missing.push(...(clients.length ? clients.map((c) => c.name) : ["any language server (none attached)"]));
+  }
+  if (missing.length > 0) return { state: "waiting", missing };
+
+  const last = Math.max(0, ...clients.filter(fresh).map((c) => c.reported_at!));
+  if (since > 0 && last > 0 && now - last < quietMs) return { state: "waiting", missing: [] };
+  return { state: "ready" };
+}
+
+export interface ProcessInfo {
+  pid: number;
+  ppid: number;
+  command: string;
+}
+
+// Parse `ps -axo pid=,ppid=,command=` output.
+export function parseProcessTable(output: string): ProcessInfo[] {
+  const procs: ProcessInfo[] = [];
+  for (const line of output.split("\n")) {
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+    if (m) procs.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3]! });
+  }
+  return procs;
+}
+
+// Paths of tsserver.js run by any descendant of `rootPid` (Neovim's LSP
+// servers, and the tsserver processes they spawn).
+export function findTsserverPaths(procs: ProcessInfo[], rootPid: number): string[] {
+  const descendants = new Set([rootPid]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const p of procs) {
+      if (!descendants.has(p.pid) && descendants.has(p.ppid)) {
+        descendants.add(p.pid);
+        grew = true;
+      }
+    }
+  }
+  const paths = new Set<string>();
+  for (const p of procs) {
+    if (p.pid === rootPid || !descendants.has(p.pid)) continue;
+    const m = p.command.match(/(\S*\/tsserver\.js)(\s|$)/);
+    if (m) paths.add(m[1]!);
+  }
+  return [...paths];
+}
+
+// The `typescript` package Node would resolve from `root`: the nearest
+// node_modules/typescript in root or an ancestor (pnpm workspaces may hoist).
+export function findWorkspaceTypescript(
+  root: string,
+  exists: (path: string) => boolean = existsSync,
+): string | null {
+  let dir = root;
+  while (true) {
+    const candidate = join(dir, "node_modules", "typescript");
+    if (exists(join(candidate, "package.json"))) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+function realpathOr(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+// An error message if the TypeScript server for `root` isn't using the
+// workspace's own `typescript`, else null. Without the workspace's copy (e.g. a
+// worktree that was never installed), typescript-language-server falls back to
+// a global tsserver that can't resolve third-party imports, so its errors are
+// wrong. `tsserverPaths` are every tsserver.js under this Neovim; when empty,
+// only the node_modules check applies.
+export function checkTypescriptRuntime(
+  clientName: string,
+  root: string,
+  tsserverPaths: string[],
+  deps: { exists?: (path: string) => boolean; realpath?: (path: string) => string } = {},
+): string | null {
+  const realpath = deps.realpath ?? realpathOr;
+  const workspaceTs = findWorkspaceTypescript(root, deps.exists);
+  if (!workspaceTs) {
+    return (
+      `${clientName} for ${root} is not using the workspace's TypeScript: ` +
+      `no node_modules/typescript in ${root} or its parents, so its diagnostics are unreliable. ` +
+      `Run \`pnpm install\` in ${root}, then restart the server (:LspRestart).`
+    );
+  }
+  if (tsserverPaths.length === 0) return null;
+  const workspaceDir = realpath(workspaceTs) + sep;
+  if (tsserverPaths.some((p) => realpath(p).startsWith(workspaceDir))) return null;
+  return (
+    `${clientName} for ${root} is not using the workspace's TypeScript (${workspaceTs}); ` +
+    `it runs ${tsserverPaths.join(", ")}. ` +
+    `Run \`pnpm install\` in ${root}, then restart the server (:LspRestart).`
+  );
+}
+
+function listProcesses(): ProcessInfo[] {
+  try {
+    const proc = Bun.spawnSync({ cmd: ["ps", "-axo", "pid=,ppid=,command="], stdout: "pipe", stderr: "ignore" });
+    return proc.exitCode === 0 ? parseProcessTable(proc.stdout.toString()) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function syncFile(nvim: NeovimClient, file: string, ensureBuffer: boolean): Promise<SyncResult> {
+  await nvim.lua(lua.trackDiagnostics, []);
+  return (await nvim.lua(lua.syncBuffer, [file, ensureBuffer, TYPESCRIPT_CLIENTS])) as SyncResult;
+}
+
+// Reports at or after this are fresh. Without a resync, any report is current.
+function freshSince(sync: SyncResult): number {
+  return sync.synced ? sync.since! : 0;
+}
+
+// Poll until every synced file has fresh diagnostics from the clients that
+// matter. With `strict`, a timeout, a failed report, or a TypeScript server not
+// running the workspace's TypeScript throws; otherwise they return silently.
+async function waitForDiagnostics(
+  nvim: NeovimClient,
+  files: { file: string; sync: SyncResult }[],
+  { strict, timeoutMs }: { strict: boolean; timeoutMs: number },
+): Promise<void> {
+  const pending = files.filter(({ sync }) => sync.bufnr > 0);
+  if (pending.length === 0) return;
+
+  const checkedRoots = new Set<string>();
+  let tsserverPaths: string[] | null = null;
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const status = (await nvim.lua(lua.diagnosticsStatus, [
+      pending.map((f) => f.sync.bufnr),
+      pending.map((f) => freshSince(f.sync)),
+    ])) as DiagnosticsStatus;
+    const errors: string[] = [];
+    const waiting: string[] = [];
+
+    status.buffers.forEach((buf, i) => {
+      const { file, sync } = pending[i]!;
+      const clients = buf.clients.map((c) => ({
+        ...c,
+        root_dir: c.root_dir ?? null,
+        reported_at: c.reported_at ?? null,
+        error: c.error ?? null,
+      }));
+
+      if (strict) {
+        for (const c of clients) {
+          if (!isTypescriptClient(c.name) || !c.root_dir || checkedRoots.has(c.root_dir)) continue;
+          checkedRoots.add(c.root_dir);
+          tsserverPaths ??= findTsserverPaths(listProcesses(), status.pid);
+          const problem = checkTypescriptRuntime(c.name, c.root_dir, tsserverPaths);
+          if (problem) errors.push(problem);
+        }
+      }
+
+      const freshness = evaluateFreshness(file, clients, freshSince(sync), status.now);
+      if (freshness.state === "error") errors.push(freshness.message);
+      if (freshness.state === "waiting") {
+        const from = freshness.missing.length ? freshness.missing.join(", ") : "clients still reporting";
+        waiting.push(`${file} (${from})`);
+      }
+    });
+
+    if (strict && errors.length > 0) throw new Error(errors.join("\n"));
+    if (waiting.length === 0) return;
+    if (Date.now() >= deadline) {
+      if (!strict) return;
+      throw new Error(
+        `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for diagnostics from ` +
+        `${waiting.join("; ")}. Results would be unknown, not clean. The server may still be ` +
+        "loading the project: retry, or raise NVIM_LSP_DIAGNOSTICS_TIMEOUT_MS.",
+      );
+    }
+    await Bun.sleep(POLL_MS);
+  }
+}
+
+// Sync a file for a position query (hover etc.), waiting briefly for the LSP
+// to catch up but never failing on that wait.
+async function syncForQuery(nvim: NeovimClient, file: string): Promise<void> {
+  const sync = await syncFile(nvim, file, true);
+  await waitForDiagnostics(nvim, [{ file, sync }], { strict: false, timeoutMs: BEST_EFFORT_TIMEOUT_MS });
+}
+
 export async function syncBuffer(selectSocket: SocketSelector, file: string) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    return await nvim.lua(lua.syncBuffer, [file]);
+    const sync = await syncFile(nvim, file, false);
+    await waitForDiagnostics(nvim, [{ file, sync }], { strict: false, timeoutMs: BEST_EFFORT_TIMEOUT_MS });
+    return sync;
   } finally {
     disconnect(socket);
   }
 }
 
+// Diagnostics for `files` (or everything Neovim holds when none are given).
+// Throws rather than return a result that only looks clean: when a required
+// client never reports within the timeout, or the TypeScript server isn't
+// running the workspace's own TypeScript.
 export async function getDiagnostics(
   selectSocket: SocketSelector,
   files: string | string[] = [],
+  timeoutMs = DIAGNOSTICS_TIMEOUT_MS,
 ) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
     const requestedFiles = typeof files === "string" ? [files] : files;
+    const synced: { file: string; sync: SyncResult }[] = [];
     for (const file of requestedFiles) {
-      await nvim.lua(lua.syncBuffer, [file, true]);
+      const sync = await syncFile(nvim, file, true);
+      if (sync.error) throw new Error(sync.error);
+      synced.push({ file, sync });
     }
+    await waitForDiagnostics(nvim, synced, { strict: true, timeoutMs });
     return await nvim.lua(lua.diagnostics, requestedFiles.length ? [requestedFiles] : []);
   } finally {
     disconnect(socket);
@@ -333,7 +620,7 @@ export async function getDiagnostics(
 export async function getHover(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    await nvim.lua(lua.syncBuffer, [file, true]);
+    await syncForQuery(nvim, file);
     return await nvim.lua(lua.hover, [file, line, col]);
   } finally {
     disconnect(socket);
@@ -343,7 +630,7 @@ export async function getHover(selectSocket: SocketSelector, file: string, line:
 export async function getDefinition(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    await nvim.lua(lua.syncBuffer, [file, true]);
+    await syncForQuery(nvim, file);
     return await nvim.lua(lua.definition, [file, line, col]);
   } finally {
     disconnect(socket);
@@ -353,7 +640,7 @@ export async function getDefinition(selectSocket: SocketSelector, file: string, 
 export async function getReferences(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    await nvim.lua(lua.syncBuffer, [file, true]);
+    await syncForQuery(nvim, file);
     return await nvim.lua(lua.references, [file, line, col]);
   } finally {
     disconnect(socket);
@@ -363,7 +650,7 @@ export async function getReferences(selectSocket: SocketSelector, file: string, 
 export async function getCompletions(selectSocket: SocketSelector, file: string, line: number, col: number) {
   const { nvim, socket } = await connectToNvim(selectSocket);
   try {
-    await nvim.lua(lua.syncBuffer, [file, true]);
+    await syncForQuery(nvim, file);
     return await nvim.lua(lua.completions, [file, line, col]);
   } finally {
     disconnect(socket);

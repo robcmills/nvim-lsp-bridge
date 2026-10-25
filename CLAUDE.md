@@ -10,6 +10,8 @@ Default to using Bun instead of Node.js.
 
 - Pass every file being checked to one `diagnostics` invocation: `bun run index.ts diagnostics <file ...>`.
 - A call with no file arguments returns all diagnostics; one or more file arguments sync and filter the result to those files.
+- With file arguments it exits non-zero rather than return an unverified `[]`: on a timeout waiting for a required client (TypeScript servers, pull-diagnostic servers like eslint) to report, or when the TypeScript server isn't running the workspace's own `typescript` (fix: `pnpm install` in the root, then `:LspRestart`). See "Diagnostics Errors" in README.md.
+- Report freshness is tracked by wrapping each client's diagnostic handlers (`lua/track_diagnostics.lua`) and polled from `lib.ts` (`lua/diagnostics_status.lua`); keep the required-client rule in `lua/sync_buffer.lua` in step with `isRequiredClient` in `lib.ts`.
 
 - Use `bun <file>` instead of `node <file>` or `ts-node <file>`
 - Use `bun test` instead of `jest` or `vitest`
