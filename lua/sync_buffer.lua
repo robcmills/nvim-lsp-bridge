@@ -1,5 +1,14 @@
 local file = select(1, ...)
 local ensure_buffer = select(2, ...) -- when true, always create a buffer (needed for queries)
+-- Optional list of client names that must have reported diagnostics for this
+-- buffer, along with any pull-diagnostic client. If one hasn't (e.g. a previous
+-- call timed out), force a resync so it sends a fresh report instead of
+-- trusting an empty, never-populated buffer. Keep in sync with
+-- isRequiredClient in lib.ts.
+local required_clients = select(3, ...)
+
+-- Diagnostic reports at or after this time are fresh for this sync.
+local since = vim.uv.now()
 
 -- Check if buffer already exists (user has it open)
 local bufnr = vim.fn.bufnr(file)
@@ -56,7 +65,9 @@ end
 local buf_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 local changed = not vim.deep_equal(buf_lines, disk_lines)
 
-if changed then
+-- Use :edit! to reload from disk — this triggers the LSP on_reload callback
+-- which sends didClose + didOpen to ALL attached clients (full resync)
+local function reload()
   local was_listed = vim.api.nvim_get_option_value('buflisted', { buf = bufnr })
   -- Belt-and-suspenders for the :edit! path: auto-respond 'e' (edit anyway) to
   -- any SwapExists prompt, in case 'swapfile' didn't take effect or the user
@@ -69,8 +80,6 @@ if changed then
       vim.v.swapchoice = 'e'
     end,
   })
-  -- Use :edit! to reload from disk — this triggers the LSP on_reload callback
-  -- which sends didClose + didOpen to ALL attached clients (full resync)
   vim.api.nvim_buf_call(bufnr, function()
     vim.cmd('edit!')
   end)
@@ -81,6 +90,10 @@ if changed then
   if not was_listed then
     vim.api.nvim_set_option_value('buflisted', false, { buf = bufnr })
   end
+end
+
+if changed then
+  reload()
 end
 
 -- Ensure LSP is attached
@@ -108,28 +121,28 @@ if #clients == 0 then
   changed = true
 end
 
--- If content changed or LSP just attached, trigger save notification and wait for diagnostics
-if changed then
-  -- Trigger BufWritePost so Neovim's built-in LSP handler sends didSave to all clients
-  -- This is needed for on-save linters like ESLint
-  vim.api.nvim_exec_autocmds('BufWritePost', { buffer = bufnr })
-
-  -- Wait for diagnostics to settle: no DiagnosticChanged for 500ms, or 10s total
-  local got_first = false
-  local last_update = 0
-  local group = vim.api.nvim_create_augroup('nvim_lsp_bridge_sync', { clear = true })
-  vim.api.nvim_create_autocmd('DiagnosticChanged', {
-    group = group,
-    buffer = bufnr,
-    callback = function()
-      got_first = true
-      last_update = vim.uv.now()
+-- An attached client we need diagnostics from has never reported for this
+-- buffer: resync so it does. Clean files still get an (empty) report.
+if not changed and required_clients then
+  local reports = (_G.__nvim_lsp_bridge and _G.__nvim_lsp_bridge.reports[bufnr]) or {}
+  for _, client in ipairs(clients) do
+    local required = vim.tbl_contains(required_clients, client.name)
+      or client.server_capabilities.diagnosticProvider ~= nil
+      or client:supports_method('textDocument/diagnostic', bufnr)
+    if required and not reports[client.id] then
+      reload()
+      changed = true
+      break
     end
-  })
-  vim.wait(10000, function()
-    return got_first and (vim.uv.now() - last_update) >= 500
-  end, 50)
-  pcall(vim.api.nvim_del_augroup_by_id, group)
+  end
 end
 
-return { bufnr = bufnr }
+-- Trigger BufWritePost so Neovim's built-in LSP handler sends didSave to all clients
+-- This is needed for on-save linters like ESLint
+if changed then
+  vim.api.nvim_exec_autocmds('BufWritePost', { buffer = bufnr })
+end
+
+-- The caller polls diagnostics_status.lua to wait for fresh reports, so long
+-- waits (a cold tsserver can take 30s+) don't block Neovim's event loop.
+return { bufnr = bufnr, synced = changed, since = since }
