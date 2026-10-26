@@ -1,3 +1,4 @@
+import { resolve } from "path";
 import type { NvimInstance, SocketSelector } from "./lib";
 import {
   createAutoSocketSelector,
@@ -142,7 +143,11 @@ async function listInstances(): Promise<void> {
 const { interactive, args: argv } = resolveInteractive(process.argv.slice(2));
 const selectSocket = interactive ? createInteractiveSocketSelector() : createAutoSocketSelector();
 const command = argv[0];
-const args = argv.slice(1);
+// Resolve file paths against the caller's cwd: Neovim would resolve them
+// against its own cwd and open the wrong (possibly nonexistent) file.
+const args = argv.slice(1).map((arg, i) =>
+  command === "diagnostics" || command === "sync" || i === 0 ? resolve(arg) : arg,
+);
 
 async function main() {
   try {

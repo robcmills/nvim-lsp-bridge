@@ -1,7 +1,7 @@
 import { attach, type NeovimClient } from "neovim";
 import { createConnection, type Socket } from "net";
 import { existsSync, readdirSync, readlinkSync, realpathSync } from "fs";
-import { basename, dirname, extname, join, sep } from "path";
+import { basename, dirname, extname, join, resolve, sep } from "path";
 import { tmpdir } from "os";
 
 const luaDir = join(import.meta.dir, "lua");
@@ -314,8 +314,8 @@ export function createAutoSocketSelector(): SocketSelector {
         const states = await probeStates(instances);
         throw new Error(
           `Multiple Neovim instances found (${instances.length}) and none is at or above ` +
-          `${process.cwd()}. Rerun from inside one of these directories, or set ` +
-          "NVIM_LISTEN_ADDRESS to its socket:\n" +
+          `${process.cwd()}. Rerun from inside one of these directories, or open ` +
+          "Neovim in your project first:\n" +
           formatInstancesPlain(instances, states)
         );
       }
@@ -540,7 +540,27 @@ function listProcesses(): ProcessInfo[] {
   }
 }
 
+function canonicalPath(path: string): string {
+  return existsSync(path) ? realpathSync(path) : resolve(path);
+}
+
+// True when `file` lies outside `nvimCwd`. Loading such a file would start
+// language servers in an unrelated window (e.g. a notes window with no code).
+export function isOutsideWorkspace(file: string, nvimCwd: string): boolean {
+  const root = canonicalPath(nvimCwd);
+  const path = canonicalPath(file);
+  return path !== root && !path.startsWith(root + sep);
+}
+
 async function syncFile(nvim: NeovimClient, file: string, ensureBuffer: boolean): Promise<SyncResult> {
+  const nvimCwd = String(await nvim.lua("return vim.fn.getcwd()", []));
+  if (isOutsideWorkspace(file, nvimCwd)) {
+    throw new Error(
+      `${file} is outside the selected Neovim's directory (${nvimCwd}). ` +
+      "Open Neovim in that file's project and rerun from there; " +
+      "never point NVIM_LISTEN_ADDRESS at another project's Neovim.",
+    );
+  }
   await nvim.lua(lua.trackDiagnostics, []);
   return (await nvim.lua(lua.syncBuffer, [file, ensureBuffer, TYPESCRIPT_CLIENTS])) as SyncResult;
 }

@@ -8,6 +8,7 @@ import {
   findWorkspaceTypescript,
   formatInstancesPlain,
   getTempRoots,
+  isOutsideWorkspace,
   isRequiredClient,
   lua,
   parsePidFromSocket,
@@ -18,6 +19,20 @@ import {
 } from "./lib";
 
 const inst = (cwd: string): NvimInstance => ({ socketPath: `/tmp/sock-${cwd}`, cwd });
+
+describe("isOutsideWorkspace", () => {
+  test("allows files inside the Neovim cwd", () => {
+    expect(isOutsideWorkspace("/nope/proj/src/a.ts", "/nope/proj")).toBe(false);
+  });
+
+  test("rejects files in another project", () => {
+    expect(isOutsideWorkspace("/nope/other/src/a.ts", "/nope/proj")).toBe(true);
+  });
+
+  test("rejects sibling dirs sharing a name prefix", () => {
+    expect(isOutsideWorkspace("/nope/proj-2/a.ts", "/nope/proj")).toBe(true);
+  });
+});
 
 describe("parsePidFromSocket", () => {
   test("parses standard nvim socket name", () => {
