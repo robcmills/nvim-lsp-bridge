@@ -6,11 +6,13 @@ import {
   findInstanceByCwd,
   findTsserverPaths,
   findWorkspaceTypescript,
+  formatInstancesPlain,
   getTempRoots,
   isRequiredClient,
   lua,
   parsePidFromSocket,
   parseProcessTable,
+  resolveInteractive,
   type ClientStatus,
   type NvimInstance,
 } from "./lib";
@@ -127,6 +129,40 @@ const client = (name: string, over: Partial<ClientStatus> = {}): ClientStatus =>
   reported_at: null,
   error: null,
   ...over,
+});
+
+describe("resolveInteractive", () => {
+  test("prompts only with a TTY on stdin and no opt-out", () => {
+    expect(resolveInteractive(["diagnostics", "a.ts"], {}, true)).toEqual({
+      interactive: true,
+      args: ["diagnostics", "a.ts"],
+    });
+  });
+
+  test("never prompts without a TTY on stdin", () => {
+    expect(resolveInteractive(["diagnostics"], {}, false).interactive).toBe(false);
+  });
+
+  test("--non-interactive opts out anywhere in argv and is stripped from args", () => {
+    expect(resolveInteractive(["diagnostics", "--non-interactive", "a.ts"], {}, true)).toEqual({
+      interactive: false,
+      args: ["diagnostics", "a.ts"],
+    });
+  });
+
+  test("NVIM_LSP_NON_INTERACTIVE opts out", () => {
+    expect(resolveInteractive(["list"], { NVIM_LSP_NON_INTERACTIVE: "1" }, true).interactive).toBe(false);
+  });
+});
+
+describe("formatInstancesPlain", () => {
+  test("lists cwd, PID, wedged state and socket without ANSI codes", () => {
+    const out = formatInstancesPlain(
+      [{ ...inst("/a"), pid: 12 }, inst("/b")],
+      ["wedged", "responsive"],
+    );
+    expect(out).toBe("  /a (PID 12) [wedged]\n    /tmp/sock-/a\n  /b\n    /tmp/sock-/b");
+  });
 });
 
 describe("isRequiredClient", () => {

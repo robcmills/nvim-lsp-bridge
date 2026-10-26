@@ -73,9 +73,9 @@ The tool automatically discovers running Neovim instances by scanning socket fil
 1. **Exact CWD match** — an instance whose working directory equals your shell's CWD.
 2. **Parent CWD match** — the deepest instance whose working directory is a parent of your shell's CWD.
 
-If no instance's CWD is an ancestor of your shell's CWD, you're prompted to choose one.
+If no instance's CWD is an ancestor of your shell's CWD, you're prompted to choose one, but only in interactive mode. With `--non-interactive`, with `NVIM_LSP_NON_INTERACTIVE` set, or whenever stdin isn't a TTY (an agent's shell), the CLI never reads stdin: it exits 1 and lists every instance with its PID, socket, and `[wedged]` if it doesn't answer. Agents should pass `--non-interactive` explicitly.
 
-To skip the prompt, set the `NVIM_LISTEN_ADDRESS` environment variable:
+To skip selection entirely, set the `NVIM_LISTEN_ADDRESS` environment variable:
 
 ```bash
 export NVIM_LISTEN_ADDRESS=/path/to/nvim/socket

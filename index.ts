@@ -1,8 +1,12 @@
 import type { NvimInstance, SocketSelector } from "./lib";
 import {
+  createAutoSocketSelector,
   discoverInstances,
   findInstanceByCwd,
+  NON_INTERACTIVE_FLAG,
   pingNvim,
+  probeStates,
+  resolveInteractive,
   syncBuffer,
   getDiagnostics,
   getHover,
@@ -21,15 +25,6 @@ function promptChoice(question: string): Promise<string> {
       resolve(data.toString().trim());
     });
   });
-}
-
-async function probeStates(instances: NvimInstance[]): Promise<("responsive" | "wedged")[]> {
-  return Promise.all(
-    instances.map(async (inst) => {
-      if (inst.state === "responsive") return "responsive";
-      return (await pingNvim(inst.socketPath)) ? "responsive" : "wedged";
-    }),
-  );
 }
 
 function formatInstanceList(
@@ -144,9 +139,10 @@ async function listInstances(): Promise<void> {
   process.stderr.write(formatInstanceList(instances, states));
 }
 
-const selectSocket = createInteractiveSocketSelector();
-const command = process.argv[2];
-const args = process.argv.slice(3);
+const { interactive, args: argv } = resolveInteractive(process.argv.slice(2));
+const selectSocket = interactive ? createInteractiveSocketSelector() : createAutoSocketSelector();
+const command = argv[0];
+const args = argv.slice(1);
 
 async function main() {
   try {
@@ -185,7 +181,7 @@ async function main() {
         break;
       }
       default:
-        console.error(`Usage: nvim-lsp <command> [args...]
+        console.error(`Usage: nvim-lsp [${NON_INTERACTIVE_FLAG}] <command> [args...]
 
 Commands:
   list                            List Neovim instances and sockets
@@ -194,7 +190,13 @@ Commands:
   hover <file> <line> <col>       Get hover/type info
   definition <file> <line> <col>  Go to definition
   references <file> <line> <col>  Find references
-  completions <file> <line> <col> Get completions`);
+  completions <file> <line> <col> Get completions
+
+Options:
+  ${NON_INTERACTIVE_FLAG}               Never prompt; when the Neovim instance is
+                                  ambiguous, exit 1 listing the candidates.
+                                  Implied when stdin is not a TTY or
+                                  NVIM_LSP_NON_INTERACTIVE is set.`);
         process.exit(1);
     }
 

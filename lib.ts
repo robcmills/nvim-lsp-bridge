@@ -240,6 +240,43 @@ export function findInstanceByCwd(
   return prefixBest;
 }
 
+export const NON_INTERACTIVE_FLAG = "--non-interactive";
+
+// Prompt only with a terminal on stdin and no opt-out (the flag or
+// NVIM_LSP_NON_INTERACTIVE). Agents have no stdin, so a prompt would hang them.
+export function resolveInteractive(
+  argv: string[],
+  env: Record<string, string | undefined> = process.env,
+  stdinIsTTY: boolean = Boolean(process.stdin.isTTY),
+): { interactive: boolean; args: string[] } {
+  const args = argv.filter((a) => a !== NON_INTERACTIVE_FLAG);
+  const optedOut = args.length !== argv.length || Boolean(env.NVIM_LSP_NON_INTERACTIVE);
+  return { interactive: stdinIsTTY && !optedOut, args };
+}
+
+// Plain-text instance list for errors read by agents (no ANSI colors).
+export function formatInstancesPlain(
+  instances: NvimInstance[],
+  states: ("responsive" | "wedged")[],
+): string {
+  return instances
+    .map((inst, i) => {
+      const pidStr = inst.pid ? ` (PID ${inst.pid})` : "";
+      const badge = states[i] === "wedged" ? " [wedged]" : "";
+      return `  ${inst.cwd}${pidStr}${badge}\n    ${inst.socketPath}`;
+    })
+    .join("\n");
+}
+
+export async function probeStates(instances: NvimInstance[]): Promise<("responsive" | "wedged")[]> {
+  return Promise.all(
+    instances.map(async (inst) => {
+      if (inst.state === "responsive") return "responsive";
+      return (await pingNvim(inst.socketPath)) ? "responsive" : "wedged";
+    }),
+  );
+}
+
 function describeUnresponsive(inst: NvimInstance): string {
   const pidStr = inst.pid ? ` (PID ${inst.pid})` : "";
   return (
@@ -274,9 +311,12 @@ export function createAutoSocketSelector(): SocketSelector {
     } else {
       const match = findInstanceByCwd(instances);
       if (!match) {
+        const states = await probeStates(instances);
         throw new Error(
-          `Multiple Neovim instances found (${instances.length}). ` +
-          "Set NVIM_LISTEN_ADDRESS or run from a directory matching a Neovim instance."
+          `Multiple Neovim instances found (${instances.length}) and none is at or above ` +
+          `${process.cwd()}. Rerun from inside one of these directories, or set ` +
+          "NVIM_LISTEN_ADDRESS to its socket:\n" +
+          formatInstancesPlain(instances, states)
         );
       }
       chosen = match;
