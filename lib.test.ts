@@ -184,6 +184,7 @@ describe("isRequiredClient", () => {
   test("requires tsserver-based clients and pull-diagnostic clients", () => {
     expect(isRequiredClient(client("ts_ls"))).toBe(true);
     expect(isRequiredClient(client("vtsls"))).toBe(true);
+    expect(isRequiredClient(client("tsgo"))).toBe(true);
     expect(isRequiredClient(client("eslint", { pull: true }))).toBe(true);
   });
 

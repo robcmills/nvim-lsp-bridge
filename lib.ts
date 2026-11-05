@@ -347,9 +347,10 @@ export function disconnect(socket: Socket): void {
   socket.destroy();
 }
 
-// LSP clients that run tsserver. They publish a (possibly empty) diagnostic set
+// TypeScript LSP clients: tsserver-based ones, and tsgo (TS 7's native
+// `tsc --lsp`). They publish a (possibly empty) diagnostic set
 // for every file they check, so "no report yet" always means "unknown".
-export const TYPESCRIPT_CLIENTS = ["ts_ls", "tsserver", "vtsls", "typescript-tools"];
+export const TYPESCRIPT_CLIENTS = ["ts_ls", "tsserver", "vtsls", "typescript-tools", "tsgo"];
 
 const TYPESCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 
